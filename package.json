@@ -1,0 +1,10 @@
+{
+  "name": "ponyatny",
+  "version": "1.0.0",
+  "private": true,
+  "bin": { "ponyatny": "src/cli.js" },
+  "scripts": {
+    "test": "node --test test/",
+    "build": "mkdir -p public && cp src/ponyatny.js public/ponyatny.js && cp primery/privet.pon public/privet.pon"
+  }
+}

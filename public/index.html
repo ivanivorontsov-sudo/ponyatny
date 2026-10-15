@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Понятный — язык программирования на русском</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:#f4f1ea;color:#222}
+header{background:#2d4a7a;color:#fff;padding:12px 18px}
+header h1{margin:0;font-size:22px}
+header p{margin:4px 0 0;opacity:.85;font-size:14px}
+main{display:flex;gap:12px;padding:12px;flex-wrap:wrap}
+section{flex:1 1 420px;display:flex;flex-direction:column}
+textarea,pre{font:15px/1.45 ui-monospace,Consolas,monospace;border:1px solid #bbb;border-radius:8px;padding:10px;min-height:60vh;margin:0;box-sizing:border-box;width:100%}
+textarea{resize:vertical;background:#fff;tab-size:4}
+pre{background:#1e1e1e;color:#d6f5d6;white-space:pre-wrap;overflow:auto}
+.bar{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+button{background:#2e8b57;color:#fff;border:0;border-radius:8px;padding:9px 18px;font-size:16px;cursor:pointer}
+button.alt{background:#777}
+.err{color:#ff8a80}
+</style>
+</head>
+<body>
+<header><h1>Понятный</h1><p>Язык программирования на понятном русском. Пиши код слева и жми «Запустить».</p></header>
+<main>
+<section>
+<div class="bar"><button id="run">▶ Запустить</button><button class="alt" id="reset">Пример</button><button class="alt" id="clear">Очистить</button></div>
+<textarea id="code" spellcheck="false"></textarea>
+</section>
+<section>
+<div class="bar"><b>Результат</b></div>
+<pre id="out"></pre>
+</section>
+</main>
+<script src="ponyatny.js"></script>
+<script>
+const code = document.getElementById("code");
+const out = document.getElementById("out");
+let example = "";
+fetch("privet.pon").then(r => r.text()).then(t => { example = t; if (!code.value) code.value = localStorage.getItem("ponyatny-code") || t; });
+code.addEventListener("input", () => localStorage.setItem("ponyatny-code", code.value));
+code.addEventListener("keydown", e => {
+  if (e.key === "Tab") { e.preventDefault(); const s = code.selectionStart; code.setRangeText("    ", s, code.selectionEnd, "end"); }
+  if (e.key === "Enter" && e.ctrlKey) document.getElementById("run").click();
+});
+document.getElementById("run").onclick = () => {
+  out.textContent = "";
+  const write = s => { out.textContent += s + "\n"; };
+  try {
+    Ponyatny.run(code.value, { write, ask: q => { const a = prompt(q); write(q + " " + (a || "")); return a; } });
+    write("\n✔ Готово");
+  } catch (e) {
+    const span = document.createElement("span");
+    span.className = "err";
+    span.textContent = "\n✖ Ошибка. " + e.message;
+    out.appendChild(span);
+  }
+};
+document.getElementById("reset").onclick = () => { code.value = example; localStorage.removeItem("ponyatny-code"); };
+document.getElementById("clear").onclick = () => { out.textContent = ""; };
+</script>
+</body>
+</html>
