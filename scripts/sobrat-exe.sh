@@ -12,3 +12,6 @@ cp "$BINS/node-$NODE_VER-win-x64/node.exe" dist/ponyatny.exe
 npx --yes postject@1.0.0-alpha.6 dist/ponyatny-linux NODE_SEA_BLOB build/sea.blob --sentinel-fuse $FUSE
 npx --yes postject@1.0.0-alpha.6 dist/ponyatny.exe NODE_SEA_BLOB build/sea.blob --sentinel-fuse $FUSE
 chmod +x dist/ponyatny-linux
+mkdir -p dist/LICENSES
+cp LICENSE THIRD_PARTY_NOTICES.md dist/LICENSES/
+cp licenses/node-LICENSE.txt licenses/acorn-LICENSE.txt dist/LICENSES/

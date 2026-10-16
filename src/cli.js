@@ -87,6 +87,7 @@ function help() {
   out("  ponyatny проверить программа.pon         только проверить ошибки");
   out("  ponyatny перевести файл --в язык         перевести: python, javascript, csharp или понятный (из .py и .js)");
   out("  ponyatny версия");
+  out("  ponyatny лицензии                       авторские права и лицензии сторонних компонентов");
   out("");
   out("Можно и коротко: ponyatny программа.pon");
 }
@@ -126,6 +127,7 @@ function cmdBuild(file, flags) {
   MAGIC.copy(tail, 8);
   fs.writeFileSync(target, Buffer.concat([body, payload, tail]));
   try { fs.chmodSync(target, 0o755); } catch (e) {}
+  fs.writeFileSync(target + ".ЛИЦЕНЗИИ.txt", require("./licenzii.js"));
   out("Готово: " + target + " (" + Math.round((body.length + payload.length) / 1048576) + " МБ)");
 }
 
@@ -176,9 +178,10 @@ function main(argv) {
   if (["собрать", "build"].includes(c)) return cmdBuild(file, flags);
   if (["компилировать", "compile", "скомпилировать"].includes(c)) return cmdCompile(file, flags);
   if (["проверить", "check"].includes(c)) return cmdCheck(file);
+  if (["лицензии", "лицензия", "licenses", "license"].includes(c)) return out(require("./licenzii.js"));
   if (["перевести", "translate"].includes(c)) return cmdTranslate(file, flags);
   if (/\.pon$/i.test(cmd) || fs.existsSync(cmd)) return cmdRun(cmd);
-  const hint = Y.suggest(cmd, ["запустить", "собрать", "компилировать", "проверить", "перевести", "версия", "помощь"]);
+  const hint = Y.suggest(cmd, ["запустить", "собрать", "компилировать", "проверить", "перевести", "версия", "помощь", "лицензии"]);
   errOut("Не знаю команду «" + cmd + "»." + hint + " Список команд: ponyatny помощь");
   process.exit(2);
 }

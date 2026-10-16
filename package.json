@@ -5,9 +5,9 @@
   "description": "Понятный — язык программирования на русском: компилятор в JavaScript, сборка .exe и переводчик",
   "bin": { "ponyatny": "src/cli.js" },
   "scripts": {
-    "test": "node --test test/",
-    "build:web": "mkdir -p public/primery && cp src/yadro.js src/perevod-iz.js src/perevod-v.js public/ && npx --yes terser node_modules/acorn/dist/acorn.js -c -m --comments false -o public/acorn.js && cp primery/*.pon public/primery/",
-    "build:exe": "sh scripts/sobrat-exe.sh"
+    "test": "node scripts/gen-licenzii.js && node --test test/",
+    "build:web": "mkdir -p public/primery && cp src/yadro.js src/perevod-iz.js src/perevod-v.js public/ && npx --yes terser node_modules/acorn/dist/acorn.js -c -m --comments false -o public/acorn.js && cp primery/*.pon public/primery/ && cp licenses/acorn-LICENSE.txt public/acorn-LICENSE.txt",
+    "build:exe": "node scripts/gen-licenzii.js && sh scripts/sobrat-exe.sh"
   },
   "dependencies": { "acorn": "^8.12.0" }
 }
