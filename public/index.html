@@ -5,59 +5,195 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Понятный — язык программирования на русском</title>
 <style>
+*{box-sizing:border-box}
 body{margin:0;font-family:system-ui,sans-serif;background:#f4f1ea;color:#222}
-header{background:#2d4a7a;color:#fff;padding:12px 18px}
+header{background:#2d4a7a;color:#fff;padding:12px 18px;display:flex;flex-wrap:wrap;align-items:center;gap:12px}
 header h1{margin:0;font-size:22px}
-header p{margin:4px 0 0;opacity:.85;font-size:14px}
+header p{margin:0;opacity:.85;font-size:14px;flex:1}
+header a{color:#cfe0ff}
 main{display:flex;gap:12px;padding:12px;flex-wrap:wrap}
-section{flex:1 1 420px;display:flex;flex-direction:column}
-textarea,pre{font:15px/1.45 ui-monospace,Consolas,monospace;border:1px solid #bbb;border-radius:8px;padding:10px;min-height:60vh;margin:0;box-sizing:border-box;width:100%}
-textarea{resize:vertical;background:#fff;tab-size:4}
-pre{background:#1e1e1e;color:#d6f5d6;white-space:pre-wrap;overflow:auto}
-.bar{display:flex;gap:8px;margin-bottom:8px;align-items:center}
-button{background:#2e8b57;color:#fff;border:0;border-radius:8px;padding:9px 18px;font-size:16px;cursor:pointer}
+section{flex:1 1 460px;display:flex;flex-direction:column;min-width:0}
+.bar{display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap}
+button,select{border:0;border-radius:8px;padding:9px 14px;font-size:15px;cursor:pointer}
+button{background:#2e8b57;color:#fff}
 button.alt{background:#777}
+button.blue{background:#2d4a7a}
+select{background:#fff;border:1px solid #bbb}
+.editor{position:relative;height:62vh;border:1px solid #bbb;border-radius:8px;background:#fff;overflow:hidden}
+.editor textarea,.editor pre{position:absolute;inset:0;margin:0;padding:10px 10px 10px 52px;font:15px/1.5 ui-monospace,Consolas,monospace;white-space:pre;overflow:auto;tab-size:4;border:0;outline:0}
+.editor textarea{color:transparent;background:transparent;caret-color:#222;resize:none;z-index:2}
+.editor pre{z-index:1;pointer-events:none;color:#222}
+.gutter{position:absolute;left:0;top:0;bottom:0;width:44px;background:#f0ede6;border-right:1px solid #ddd;z-index:3;overflow:hidden;font:15px/1.5 ui-monospace,Consolas,monospace;color:#999;text-align:right;padding:10px 6px 10px 0;pointer-events:none}
+.gutter div.bad{background:#ffd7d2;color:#b00}
+.k{color:#7a3ea8;font-weight:600}.s{color:#1f7a1f}.n{color:#b35c00}.c{color:#8a8a8a;font-style:italic}.b{color:#1a5fb4}.t{color:#a51d2d}.i{color:#555;background:#eef6ee}
+pre.out{background:#1e1e1e;color:#d6f5d6;white-space:pre-wrap;overflow:auto;border-radius:8px;padding:10px;margin:0;font:15px/1.45 ui-monospace,Consolas,monospace;min-height:20vh;flex:1}
+pre.code{background:#fbfaf6;color:#222;border:1px solid #bbb;white-space:pre;overflow:auto;border-radius:8px;padding:10px;margin:8px 0 0;font:13px/1.4 ui-monospace,Consolas,monospace;max-height:46vh}
 .err{color:#ff8a80}
+.note{background:#fff7d6;border:1px solid #e8d48a;border-radius:8px;padding:8px 10px;margin-top:8px;font-size:14px}
+.hidden{display:none}
+.tabs{display:flex;gap:6px;margin-top:10px}
+.tabs button{background:#ddd;color:#222}
+.tabs button.on{background:#2d4a7a;color:#fff}
+textarea.src{width:100%;height:24vh;font:14px/1.4 ui-monospace,Consolas,monospace;border:1px solid #bbb;border-radius:8px;padding:8px;margin-top:8px}
 </style>
 </head>
 <body>
-<header><h1>Понятный</h1><p>Язык программирования на понятном русском. Пиши код слева и жми «Запустить».</p></header>
+<header><h1>Понятный</h1><p>Язык программирования на понятном русском. Пиши код слева, жми «Запустить» (Ctrl+Enter). <a href="https://github.com/ivanivorontsov-sudo/ponyatny/blob/main/docs/%D0%A1%D0%98%D0%9D%D0%A2%D0%90%D0%9A%D0%A1%D0%98%D0%A1.md" target="_blank">Синтаксис</a></p></header>
 <main>
 <section>
-<div class="bar"><button id="run">▶ Запустить</button><button class="alt" id="reset">Пример</button><button class="alt" id="clear">Очистить</button></div>
-<textarea id="code" spellcheck="false"></textarea>
+<div class="bar">
+<button id="run">▶ Запустить</button>
+<button class="blue" id="showjs">Показать скомпилированный код</button>
+<select id="examples"><option value="">Примеры…</option></select>
+<button class="alt" id="clear">Очистить вывод</button>
+</div>
+<div class="editor"><div class="gutter" id="gutter"></div><pre id="hl" aria-hidden="true"></pre><textarea id="code" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></div>
 </section>
 <section>
 <div class="bar"><b>Результат</b></div>
-<pre id="out"></pre>
+<pre class="out" id="out"></pre>
+<pre class="code hidden" id="jsout"></pre>
+<div class="tabs"><button id="tab-tr" class="on">Перевести</button></div>
+<div id="trpanel">
+<div class="bar" style="margin-top:8px">
+<select id="trdir">
+<option value="python">Понятный → Python</option>
+<option value="javascript">Понятный → JavaScript</option>
+<option value="csharp">Понятный → C#</option>
+<option value="from-python">Python → Понятный</option>
+<option value="from-javascript">JavaScript → Понятный</option>
+</select>
+<button class="blue" id="translate">Перевести</button>
+<button class="alt hidden" id="toeditor">Вставить в редактор</button>
+</div>
+<textarea class="src hidden" id="trsrc" spellcheck="false" placeholder="Вставь сюда код на Python или JavaScript"></textarea>
+<pre class="code hidden" id="trout"></pre>
+<div class="note hidden" id="trnotes"></div>
+</div>
 </section>
 </main>
-<script src="ponyatny.js"></script>
+<script src="acorn.js"></script>
+<script src="yadro.js"></script>
+<script src="perevod-iz.js"></script>
+<script src="perevod-v.js"></script>
 <script>
-const code = document.getElementById("code");
-const out = document.getElementById("out");
-let example = "";
-fetch("privet.pon").then(r => r.text()).then(t => { example = t; if (!code.value) code.value = localStorage.getItem("ponyatny-code") || t; });
-code.addEventListener("input", () => localStorage.setItem("ponyatny-code", code.value));
-code.addEventListener("keydown", e => {
-  if (e.key === "Tab") { e.preventDefault(); const s = code.selectionStart; code.setRangeText("    ", s, code.selectionEnd, "end"); }
-  if (e.key === "Enter" && e.ctrlKey) document.getElementById("run").click();
-});
-document.getElementById("run").onclick = () => {
-  out.textContent = "";
-  const write = s => { out.textContent += s + "\n"; };
-  try {
-    Ponyatny.run(code.value, { write, ask: q => { const a = prompt(q); write(q + " " + (a || "")); return a; } });
-    write("\n✔ Готово");
-  } catch (e) {
-    const span = document.createElement("span");
-    span.className = "err";
-    span.textContent = "\n✖ Ошибка. " + e.message;
-    out.appendChild(span);
+const Y = PonyatnyYadro;
+const $ = (id) => document.getElementById(id);
+const code = $("code"), hl = $("hl"), out = $("out"), gutter = $("gutter"), jsout = $("jsout");
+const EXAMPLES = [
+  ["privet.pon", "Привет (первая программа)"],
+  ["kalkulyator.pon", "Калькулятор"],
+  ["ugadai.pon", "Угадай число"],
+  ["klass.pon", "Классы и наследование"],
+  ["slovar.pon", "Словари"],
+  ["faktorial.pon", "Рекурсия: факториал"],
+  ["novoe.pon", "Конвейер, шаблоны, ?., навсегда"],
+  ["vse.pon", "Всё сразу"],
+];
+const files = {};
+let errLine = 0;
+const KW = new Set(Y.KEYWORDS);
+const BI = new Set(Object.keys(Y.BUILTINS));
+const TY = new Set(Y.TYPES);
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function highlight(src) {
+  let h = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "#" || (c === "/" && src[i + 1] === "/")) { let j = src.indexOf("\n", i); if (j < 0) j = src.length; h += "<span class=c>" + esc(src.slice(i, j)) + "</span>"; i = j; continue; }
+    if (c === '"' || c === "«") {
+      const close = c === '"' ? '"' : "»";
+      let j = i + 1;
+      while (j < src.length && src[j] !== close && src[j] !== "\n") j += src[j] === "\\" ? 2 : 1;
+      const s = src.slice(i, Math.min(j + 1, src.length));
+      h += "<span class=s>" + esc(s).replace(/\{([^{}]*)\}/g, "<span class=i>{$1}</span>") + "</span>";
+      i = j + 1;
+      continue;
+    }
+    const m = src.slice(i).match(/^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё]*/);
+    if (m) {
+      const w = m[0], low = w.toLowerCase();
+      h += KW.has(low) ? "<span class=k>" + esc(w) + "</span>" : BI.has(w) ? "<span class=b>" + esc(w) + "</span>" : TY.has(w) ? "<span class=t>" + esc(w) + "</span>" : esc(w);
+      i += w.length;
+      continue;
+    }
+    const n = src.slice(i).match(/^\d[\d_]*(\.\d+)?/);
+    if (n) { h += "<span class=n>" + n[0] + "</span>"; i += n[0].length; continue; }
+    h += esc(c);
+    i++;
   }
+  return h + "\n";
+}
+function refresh() {
+  hl.innerHTML = highlight(code.value);
+  const count = code.value.split("\n").length;
+  let g = "";
+  for (let k = 1; k <= count; k++) g += "<div" + (k === errLine ? " class=bad" : "") + ">" + k + "</div>";
+  gutter.innerHTML = g;
+  sync();
+}
+function sync() { hl.scrollTop = code.scrollTop; hl.scrollLeft = code.scrollLeft; gutter.scrollTop = code.scrollTop; }
+code.addEventListener("input", () => { errLine = 0; refresh(); localStorage.setItem("ponyatny-code", code.value); });
+code.addEventListener("scroll", sync);
+code.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") { e.preventDefault(); const s = code.selectionStart; code.setRangeText("    ", s, code.selectionEnd, "end"); refresh(); }
+  if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); $("run").click(); }
+  else if (e.key === "Enter") {
+    const s = code.selectionStart;
+    const lineStart = code.value.lastIndexOf("\n", s - 1) + 1;
+    const ind = code.value.slice(lineStart, s).match(/^\s*/)[0];
+    if (ind) { e.preventDefault(); code.setRangeText("\n" + ind, s, code.selectionEnd, "end"); refresh(); }
+  }
+});
+const resolve = (p) => (files[p] !== undefined ? { id: p, name: p, source: files[p] } : null);
+function showError(e) {
+  const span = document.createElement("span");
+  span.className = "err";
+  span.textContent = "\n✖ Ошибка. " + e.message;
+  out.appendChild(span);
+  if (e.line) { errLine = e.line; refresh(); }
+}
+$("run").onclick = () => {
+  out.textContent = "";
+  errLine = 0;
+  const write = (s) => { out.textContent += s + "\n"; };
+  try {
+    Y.run(code.value, { write, resolve, ask: (q) => { const a = prompt(q || "Введи значение"); write((q ? q + " " : "") + (a === null ? "" : a)); return a === null ? "" : a; } });
+    out.appendChild(document.createTextNode("\n✔ Готово"));
+  } catch (e) { showError(e); }
+  refresh();
 };
-document.getElementById("reset").onclick = () => { code.value = example; localStorage.removeItem("ponyatny-code"); };
-document.getElementById("clear").onclick = () => { out.textContent = ""; };
+$("showjs").onclick = () => {
+  if (!jsout.classList.contains("hidden")) { jsout.classList.add("hidden"); $("showjs").textContent = "Показать скомпилированный код"; return; }
+  try { jsout.textContent = Y.compile(code.value, { resolve }); }
+  catch (e) { jsout.textContent = "Ошибка. " + e.message; if (e.line) { errLine = e.line; refresh(); } }
+  jsout.classList.remove("hidden");
+  $("showjs").textContent = "Скрыть скомпилированный код";
+};
+$("clear").onclick = () => { out.textContent = ""; };
+const sel = $("examples");
+for (const [f, title] of EXAMPLES) { const o = document.createElement("option"); o.value = f; o.textContent = title; sel.appendChild(o); }
+sel.onchange = () => { if (sel.value && files[sel.value] !== undefined) { code.value = files[sel.value]; errLine = 0; refresh(); localStorage.setItem("ponyatny-code", code.value); } sel.value = ""; };
+Promise.all(EXAMPLES.map(([f]) => fetch("primery/" + f).then((r) => r.text()).then((t) => { files[f] = t; }))).then(() => {
+  if (!code.value) code.value = localStorage.getItem("ponyatny-code") || files["privet.pon"];
+  refresh();
+});
+const trdir = $("trdir"), trsrc = $("trsrc"), trout = $("trout"), trnotes = $("trnotes");
+trdir.onchange = () => { trsrc.classList.toggle("hidden", !trdir.value.startsWith("from-")); trout.classList.add("hidden"); trnotes.classList.add("hidden"); $("toeditor").classList.add("hidden"); };
+$("translate").onclick = () => {
+  trnotes.classList.add("hidden");
+  $("toeditor").classList.add("hidden");
+  try {
+    let r;
+    if (trdir.value.startsWith("from-")) { r = PonyatnyPerevodV.translateToPon(trsrc.value, trdir.value.slice(5)); $("toeditor").classList.remove("hidden"); }
+    else r = PonyatnyPerevodIz.translate(code.value, trdir.value, { resolve });
+    trout.textContent = r.code;
+    if (r.notes.length) { trnotes.innerHTML = "<b>Неточные места (" + r.notes.length + "):</b><br>" + r.notes.map((n) => esc((n.line ? "строка " + n.line + ": " : "") + n.text)).join("<br>"); trnotes.classList.remove("hidden"); }
+  } catch (e) { trout.textContent = "Ошибка. " + e.message; }
+  trout.classList.remove("hidden");
+};
+$("toeditor").onclick = () => { code.value = trout.textContent; refresh(); };
 </script>
 </body>
 </html>

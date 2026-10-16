@@ -1,30 +1,186 @@
 #!/usr/bin/env node
+"use strict";
 const fs = require("fs");
-const { run } = require("./ponyatny");
+const path = require("path");
+const Y = require("./yadro");
+const VERSION = "2.0.0";
+const MAGIC = Buffer.from("PONYATNY", "ascii");
 
-function askSync(q) {
-  process.stdout.write(q + " ");
-  const buf = Buffer.alloc(1);
-  let s = "";
-  for (;;) {
-    let n = 0;
-    try { n = fs.readSync(0, buf, 0, 1, null); } catch (e) { if (e.code === "EAGAIN") continue; if (e.code === "EOF") break; throw e; }
-    if (n === 0) break;
-    const ch = buf.toString("utf8", 0, 1);
-    if (ch === "\n") break;
-    s += buf.toString("latin1", 0, 1);
+if (process.platform === "win32") { try { require("child_process").execSync("chcp 65001", { stdio: "ignore" }); } catch (e) {} }
+
+function isSea() { try { return require("node:sea").isSea(); } catch (e) { return false; } }
+
+function readPayload(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    if (size < 16) return null;
+    const tail = Buffer.alloc(16);
+    fs.readSync(fd, tail, 0, 16, size - 16);
+    if (!tail.subarray(8).equals(MAGIC)) return null;
+    const len = Number(tail.readBigUInt64LE(0));
+    if (len <= 0 || len > size - 16) return null;
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - 16 - len);
+    return { code: buf.toString("utf8"), baseSize: size - 16 - len };
+  } catch (e) {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
-  return Buffer.from(s, "latin1").toString("utf8").replace(/\r$/, "");
 }
 
-const file = process.argv[2];
-if (!file) {
-  console.log("Как запускать: node src/cli.js программа.pon");
-  process.exit(1);
+function runPayload(code) {
+  new Function("require", "process", "Buffer", code)(require, process, Buffer);
 }
-try {
-  run(fs.readFileSync(file, "utf8"), { write: (s) => console.log(s), ask: askSync });
-} catch (e) {
-  console.error("Ошибка. " + e.message);
-  process.exit(1);
+
+function out(s) { process.stdout.write(s + "\n"); }
+function errOut(s) { process.stderr.write(s + "\n"); }
+
+function resolver(baseFile) {
+  return (p, from) => {
+    const dir = path.dirname(from && fs.existsSync(from) ? from : baseFile);
+    let full = path.resolve(dir, p);
+    if (!fs.existsSync(full) && !/\.pon$/i.test(full)) full += ".pon";
+    if (!fs.existsSync(full)) return null;
+    return { id: full, name: full, source: fs.readFileSync(full, "utf8") };
+  };
 }
+
+function readSource(file) {
+  if (!file) { errOut("Не указан файл программы. Пример: ponyatny запустить программа.pon"); process.exit(2); }
+  if (!fs.existsSync(file)) { errOut("Файл «" + file + "» не найден."); process.exit(2); }
+  return fs.readFileSync(file, "utf8");
+}
+
+function compileFile(file) {
+  const src = readSource(file);
+  try {
+    return Y.compile(src, { file: path.resolve(file), resolve: resolver(path.resolve(file)) });
+  } catch (e) {
+    if (e instanceof Y.CompileError) { errOut("Ошибка. " + e.message.replace(path.resolve(file), path.basename(file))); process.exit(1); }
+    throw e;
+  }
+}
+
+function parseFlags(args) {
+  const flags = {}, rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-o" || a === "--выход" || a === "--out") flags.out = args[++i];
+    else if (a === "--в" || a === "--to" || a === "-в") flags.to = args[++i];
+    else if (a === "--js") flags.js = true;
+    else if (a === "--основа" || a === "--base") flags.base = args[++i];
+    else rest.push(a);
+  }
+  return { flags, rest };
+}
+
+function help() {
+  out("Понятный " + VERSION + " — язык программирования на русском.");
+  out("");
+  out("Команды:");
+  out("  ponyatny запустить программа.pon        выполнить программу");
+  out("  ponyatny собрать программа.pon [-o имя]  сделать программу .exe (на Windows) или исполняемый файл (на Linux)");
+  out("  ponyatny компилировать программа.pon     получить программа.js (JavaScript для Node.js)");
+  out("  ponyatny проверить программа.pon         только проверить ошибки");
+  out("  ponyatny перевести файл --в язык         перевести: python, javascript, csharp или понятный (из .py и .js)");
+  out("  ponyatny версия");
+  out("");
+  out("Можно и коротко: ponyatny программа.pon");
+}
+
+function cmdRun(file) {
+  const js = compileFile(file);
+  runPayload(Y.standalone(js));
+}
+
+function cmdCompile(file, flags) {
+  const js = Y.standalone(compileFile(file));
+  const target = flags.out || file.replace(/\.pon$/i, "") + ".js";
+  fs.writeFileSync(target, "#!/usr/bin/env node\n" + js, "utf8");
+  out("Готово: " + target);
+}
+
+function cmdBuild(file, flags) {
+  const js = Y.standalone(compileFile(file));
+  let base = flags.base;
+  if (!base) {
+    if (isSea()) base = process.execPath;
+    else {
+      const guess = path.join(__dirname, "..", "dist", process.platform === "win32" ? "ponyatny.exe" : "ponyatny-linux");
+      if (fs.existsSync(guess)) base = guess;
+    }
+  }
+  if (!base || !fs.existsSync(base)) { errOut("Не найден исполняемый файл компилятора, на основе которого собирается программа. Запусти собранный ponyatny.exe или укажи --основа путь."); process.exit(2); }
+  const winBase = /\.exe$/i.test(base);
+  let target = flags.out || file.replace(/\.pon$/i, "");
+  if (winBase && !/\.exe$/i.test(target)) target += ".exe";
+  const own = readPayload(base);
+  const baseBuf = fs.readFileSync(base);
+  const body = own ? baseBuf.subarray(0, own.baseSize) : baseBuf;
+  const payload = Buffer.from(js, "utf8");
+  const tail = Buffer.alloc(16);
+  tail.writeBigUInt64LE(BigInt(payload.length), 0);
+  MAGIC.copy(tail, 8);
+  fs.writeFileSync(target, Buffer.concat([body, payload, tail]));
+  try { fs.chmodSync(target, 0o755); } catch (e) {}
+  out("Готово: " + target + " (" + Math.round((body.length + payload.length) / 1048576) + " МБ)");
+}
+
+function cmdCheck(file) {
+  compileFile(file);
+  out("Ошибок нет: " + file);
+}
+
+function cmdTranslate(file, flags) {
+  const src = readSource(file);
+  const to = String(flags.to || "").toLowerCase();
+  if (!to) { errOut("Укажи язык: --в python, --в javascript, --в csharp или --в понятный"); process.exit(2); }
+  let res, ext;
+  try {
+    if (["понятный", "ponyatny", "pon"].includes(to)) {
+      const from = /\.py$/i.test(file) ? "python" : /\.(m?js|cjs)$/i.test(file) ? "javascript" : null;
+      if (!from) { errOut("Переводить в «Понятный» можно файлы .py и .js"); process.exit(2); }
+      res = require("./perevod-v").translateToPon(src, from);
+      ext = ".pon";
+    } else {
+      res = require("./perevod-iz").translate(src, to, { file: path.resolve(file), resolve: resolver(path.resolve(file)) });
+      ext = { python: ".py", py: ".py", javascript: ".js", js: ".js", csharp: ".cs", "c#": ".cs", cs: ".cs" }[to] || ".txt";
+    }
+  } catch (e) {
+    errOut("Ошибка. " + e.message);
+    process.exit(1);
+  }
+  const target = flags.out || file.replace(/\.[^.\\/]+$/, "") + (ext === path.extname(file) ? ".перевод" : "") + ext;
+  fs.writeFileSync(target, res.code, "utf8");
+  out("Готово: " + target);
+  if (res.notes.length) {
+    out("Примечания (" + res.notes.length + ") — эти места переведены не точно, проверьте их:");
+    for (const n of res.notes) out("  " + (n.line ? "строка " + n.line + ": " : "") + n.text);
+  }
+}
+
+function main(argv) {
+  if (isSea()) {
+    const own = readPayload(process.execPath);
+    if (own) { runPayload(own.code); return; }
+  }
+  const { flags, rest } = parseFlags(argv);
+  const [cmd, file] = rest;
+  const c = (cmd || "").toLowerCase();
+  if (!c || ["помощь", "help", "-h", "--help", "справка"].includes(c)) return help();
+  if (["версия", "version", "-v", "--version"].includes(c)) return out("Понятный " + VERSION);
+  if (["запустить", "run", "выполнить"].includes(c)) return cmdRun(file);
+  if (["собрать", "build"].includes(c)) return cmdBuild(file, flags);
+  if (["компилировать", "compile", "скомпилировать"].includes(c)) return cmdCompile(file, flags);
+  if (["проверить", "check"].includes(c)) return cmdCheck(file);
+  if (["перевести", "translate"].includes(c)) return cmdTranslate(file, flags);
+  if (/\.pon$/i.test(cmd) || fs.existsSync(cmd)) return cmdRun(cmd);
+  const hint = Y.suggest(cmd, ["запустить", "собрать", "компилировать", "проверить", "перевести", "версия", "помощь"]);
+  errOut("Не знаю команду «" + cmd + "»." + hint + " Список команд: ponyatny помощь");
+  process.exit(2);
+}
+
+main(process.argv.slice(2));
