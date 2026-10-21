@@ -536,7 +536,7 @@
           return;
         }
         case "func": {
-          const ps = s.params.map((q) => (L === "csharp" ? "dynamic " + q.name + (q.def ? " = " + E(q.def) : "") : nm(q.name) + (q.def ? (L === "python" ? "=" : " = ") + E(q.def) : "")));
+          const ps = s.params.map((q) => (L === "csharp" ? "dynamic " + q.name + (q.def ? " = null" : "") : nm(q.name) + (q.def ? (L === "python" ? "=" : " = ") + E(q.def) : "")));
           if (L === "python") {
             const isInit = inClass && s.name === "создать";
             const name = isInit ? "__init__" : s.name === "строкой" && inClass ? "__str__" : nm(s.name);
@@ -562,7 +562,7 @@
             else if (inClass && s.name === "строкой") emit("public override string ToString()");
             else emit((inClass ? "public virtual " : "static ") + "dynamic " + nm(s.name) + "(" + ps.join(", ") + ")");
             emit("{");
-            ind++; block(s.body); if (!isInit && !(inClass && s.name === "строкой") && !(s.body.length && s.body[s.body.length - 1].k === "return")) emit("return null;"); ind--;
+            ind++; s.params.filter((q) => q.def && !(q.def.k === "lit" && q.def.v == null)).forEach((q) => emit("if (" + q.name + " == null) " + q.name + " = " + E(q.def) + ";")); block(s.body); if (!isInit && !(inClass && s.name === "строкой") && !(s.body.length && s.body[s.body.length - 1].k === "return")) emit("return null;"); ind--;
             emit("}");
           }
           return;
