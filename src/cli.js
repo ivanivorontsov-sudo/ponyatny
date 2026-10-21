@@ -3,10 +3,10 @@
 const fs = require("fs");
 const path = require("path");
 const Y = require("./yadro");
-const VERSION = "2.0.0";
+const VERSION = "2.1.0-beta.1";
 const MAGIC = Buffer.from("PONYATNY", "ascii");
 
-if (process.platform === "win32") { try { require("child_process").execSync("chcp 65001", { stdio: "ignore" }); } catch (e) {} }
+if (process.platform === "win32") { try { require("child_process").execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "chcp.com"), ["65001"], { stdio: "ignore", windowsHide: true }); } catch (e) {} }
 
 function isSea() { try { return require("node:sea").isSea(); } catch (e) { return false; } }
 
@@ -42,8 +42,8 @@ function resolver(baseFile) {
   return (p, from) => {
     const dir = path.dirname(from && fs.existsSync(from) ? from : baseFile);
     let full = path.resolve(dir, p);
-    if (!fs.existsSync(full) && !/\.pon$/i.test(full)) full += ".pon";
-    if (!fs.existsSync(full)) return null;
+    if (!/\.pon$/i.test(full)) full += ".pon";
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
     return { id: full, name: full, source: fs.readFileSync(full, "utf8") };
   };
 }
@@ -54,10 +54,14 @@ function readSource(file) {
   return fs.readFileSync(file, "utf8");
 }
 
-function compileFile(file) {
+function warnOut(w) {
+  errOut("Предупреждение. " + (w.file ? "Файл «" + path.basename(w.file) + "», строка " : "Строка ") + w.line + (w.col ? ", столбец " + w.col : "") + ": " + w.text);
+}
+
+function compileFile(file, flags) {
   const src = readSource(file);
   try {
-    return Y.compile(src, { file: path.resolve(file), resolve: resolver(path.resolve(file)) });
+    return Y.compile(src, { file: path.resolve(file), resolve: resolver(path.resolve(file)), warn: warnOut, ascii: !!(flags && flags.ascii) });
   } catch (e) {
     if (e instanceof Y.CompileError) { errOut("Ошибка. " + e.message.replace(path.resolve(file), path.basename(file))); process.exit(1); }
     throw e;
@@ -71,6 +75,7 @@ function parseFlags(args) {
     if (a === "-o" || a === "--выход" || a === "--out") flags.out = args[++i];
     else if (a === "--в" || a === "--to" || a === "-в") flags.to = args[++i];
     else if (a === "--js") flags.js = true;
+    else if (a === "--ascii" || a === "--латиница") flags.ascii = true;
     else if (a === "--основа" || a === "--base") flags.base = args[++i];
     else rest.push(a);
   }
@@ -85,11 +90,28 @@ function help() {
   out("  ponyatny собрать программа.pon [-o имя]  сделать программу .exe (на Windows) или исполняемый файл (на Linux)");
   out("  ponyatny компилировать программа.pon     получить программа.js (JavaScript для Node.js)");
   out("  ponyatny проверить программа.pon         только проверить ошибки");
-  out("  ponyatny перевести файл --в язык         перевести: python, javascript, csharp или понятный (из .py и .js)");
+  out("  ponyatny перевести файл --в язык         по желанию: перевести в python, javascript, csharp или понятный (из .py и .js)");
+  out("                                           --латиница: русские имена переменных записать латиницей");
+  out("  ponyatny компилировать … --ascii          имена в JavaScript только латиницей");
   out("  ponyatny версия");
   out("  ponyatny лицензии                       авторские права и лицензии сторонних компонентов");
   out("");
   out("Можно и коротко: ponyatny программа.pon");
+}
+
+function sameFile(a, b) {
+  const ra = path.resolve(a), rb = path.resolve(b);
+  if (ra === rb || (process.platform === "win32" && ra.toLowerCase() === rb.toLowerCase())) return true;
+  try { const x = fs.statSync(ra), y = fs.statSync(rb); return x.ino === y.ino && x.dev === y.dev && x.ino !== 0; } catch (e) { return false; }
+}
+
+function safeTarget(target, protect) {
+  if (!target) { errOut("Не указано имя выходного файла."); process.exit(2); }
+  for (const [p, what] of protect) {
+    if (p && sameFile(target, p)) { errOut("Ошибка. Выходной файл «" + target + "» совпадает с " + what + ". Укажи другое имя через -o."); process.exit(2); }
+  }
+  try { if (fs.existsSync(target) && fs.statSync(target).isDirectory()) { errOut("Ошибка. «" + target + "» — это папка, а не файл. Укажи имя файла через -o."); process.exit(2); } } catch (e) {}
+  return target;
 }
 
 function cmdRun(file) {
@@ -98,14 +120,14 @@ function cmdRun(file) {
 }
 
 function cmdCompile(file, flags) {
-  const js = Y.standalone(compileFile(file));
-  const target = flags.out || file.replace(/\.pon$/i, "") + ".js";
+  const js = Y.standalone(compileFile(file, flags));
+  const target = safeTarget(flags.out || file.replace(/\.pon$/i, "") + ".js", [[file, "файлом программы"], [process.execPath, "самим компилятором"]]);
   fs.writeFileSync(target, "#!/usr/bin/env node\n" + js, "utf8");
   out("Готово: " + target);
 }
 
 function cmdBuild(file, flags) {
-  const js = Y.standalone(compileFile(file));
+  const js = Y.standalone(compileFile(file, flags));
   let base = flags.base;
   if (!base) {
     if (isSea()) base = process.execPath;
@@ -118,6 +140,8 @@ function cmdBuild(file, flags) {
   const winBase = /\.exe$/i.test(base);
   let target = flags.out || file.replace(/\.pon$/i, "");
   if (winBase && !/\.exe$/i.test(target)) target += ".exe";
+  if (!winBase && !flags.out && !/\.pon$/i.test(file)) target += ".bin";
+  safeTarget(target, [[file, "файлом программы"], [base, "компилятором, на основе которого идёт сборка"], [process.execPath, "самим компилятором"]]);
   const own = readPayload(base);
   const baseBuf = fs.readFileSync(base);
   const body = own ? baseBuf.subarray(0, own.baseSize) : baseBuf;
@@ -131,8 +155,8 @@ function cmdBuild(file, flags) {
   out("Готово: " + target + " (" + Math.round((body.length + payload.length) / 1048576) + " МБ)");
 }
 
-function cmdCheck(file) {
-  compileFile(file);
+function cmdCheck(file, flags) {
+  compileFile(file, flags);
   out("Ошибок нет: " + file);
 }
 
@@ -148,14 +172,14 @@ function cmdTranslate(file, flags) {
       res = require("./perevod-v").translateToPon(src, from);
       ext = ".pon";
     } else {
-      res = require("./perevod-iz").translate(src, to, { file: path.resolve(file), resolve: resolver(path.resolve(file)) });
+      res = require("./perevod-iz").translate(src, to, { file: path.resolve(file), resolve: resolver(path.resolve(file)), latin: !!flags.ascii });
       ext = { python: ".py", py: ".py", javascript: ".js", js: ".js", csharp: ".cs", "c#": ".cs", cs: ".cs" }[to] || ".txt";
     }
   } catch (e) {
     errOut("Ошибка. " + e.message);
     process.exit(1);
   }
-  const target = flags.out || file.replace(/\.[^.\\/]+$/, "") + (ext === path.extname(file) ? ".перевод" : "") + ext;
+  const target = safeTarget(flags.out || file.replace(/\.[^.\\/]+$/, "") + (ext === path.extname(file) ? ".перевод" : "") + ext, [[file, "исходным файлом"]]);
   fs.writeFileSync(target, res.code, "utf8");
   out("Готово: " + target);
   if (res.notes.length) {
@@ -177,7 +201,7 @@ function main(argv) {
   if (["запустить", "run", "выполнить"].includes(c)) return cmdRun(file);
   if (["собрать", "build"].includes(c)) return cmdBuild(file, flags);
   if (["компилировать", "compile", "скомпилировать"].includes(c)) return cmdCompile(file, flags);
-  if (["проверить", "check"].includes(c)) return cmdCheck(file);
+  if (["проверить", "check"].includes(c)) return cmdCheck(file, flags);
   if (["лицензии", "лицензия", "licenses", "license"].includes(c)) return out(require("./licenzii.js"));
   if (["перевести", "translate"].includes(c)) return cmdTranslate(file, flags);
   if (/\.pon$/i.test(cmd) || fs.existsSync(cmd)) return cmdRun(cmd);

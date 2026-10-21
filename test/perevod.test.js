@@ -71,7 +71,7 @@ test("ошибки переводчика по-русски", () => {
   assert.throws(() => IZ.translate("напиши 1", "cobol"), /не знаю язык «cobol»/);
   assert.throws(() => V.translateToPon("def f(:\n", "python"), /Строка 1/);
   assert.throws(() => V.translateToPon("let = ;", "javascript"), /JavaScript не разобрался/);
-  assert.throws(() => IZ.translate("напишы 1", "python"), /Может быть, «напиши»\?/);
+  assert.throws(() => IZ.translate("напиши хх", "python"), /не знаю, что такое «хх»/);
 });
 test("Понятный → C# собирается и даёт тот же вывод", { skip: !dotnet || !process.env.PON_CSHARP ? "C# проверяется при PON_CSHARP=1 и установленном dotnet" : false, timeout: 240000 }, () => {
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), "pon-cs-"));

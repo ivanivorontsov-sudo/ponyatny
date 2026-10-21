@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <title>Понятный — язык программирования на русском</title>
 <style>
 *{box-sizing:border-box}
@@ -35,6 +37,7 @@ pre.code{background:#fbfaf6;color:#222;border:1px solid #bbb;white-space:pre;ove
 .tabs button{background:#ddd;color:#222}
 .tabs button.on{background:#2d4a7a;color:#fff}
 textarea.src{width:100%;height:24vh;font:14px/1.4 ui-monospace,Consolas,monospace;border:1px solid #bbb;border-radius:8px;padding:8px;margin-top:8px}
+.warn{color:#b26b00}
 </style>
 </head>
 <body>
@@ -155,19 +158,53 @@ function showError(e) {
   out.appendChild(span);
   if (e.line) { errLine = e.line; refresh(); }
 }
+let sandbox = null, sandboxTimer = 0;
+const safeScript = (js) => js.replace(/<\/(script)/gi, "<\\/$1").replace(/\x3C!--/g, "\\x3C!--");
+function stopSandbox() { if (sandbox) { sandbox.remove(); sandbox = null; } clearTimeout(sandboxTimer); $("run").disabled = false; }
+function finishRun(ok, msg, line) {
+  stopSandbox();
+  if (ok) out.appendChild(document.createTextNode("\n✔ Готово"));
+  else showError({ message: msg, line });
+  refresh();
+}
+function showWarnings(ws) {
+  for (const w of ws) { const s = document.createElement("span"); s.className = "warn"; s.textContent = "⚠ Строка " + w.line + ": " + w.text + "\n"; out.appendChild(s); }
+}
 $("run").onclick = () => {
+  stopSandbox();
   out.textContent = "";
   errLine = 0;
-  const write = (s) => { out.textContent += s + "\n"; };
-  try {
-    Y.run(code.value, { write, resolve, ask: (q) => { const a = prompt(q || "Введи значение"); write((q ? q + " " : "") + (a === null ? "" : a)); return a === null ? "" : a; } });
-    out.appendChild(document.createTextNode("\n✔ Готово"));
-  } catch (e) { showError(e); }
-  refresh();
+  const warns = [];
+  let js;
+  try { js = Y.compile(code.value, { resolve, guard: true, warn: (w) => warns.push(w) }); }
+  catch (e) { showWarnings(warns); showError(e); refresh(); return; }
+  showWarnings(warns);
+  const boot = "\"use strict\";\n" +
+    "const __makeRuntime = " + Y.makeRuntime.toString() + ";\n" +
+    "const __post = (m) => parent.postMessage(m, \"*\");\n" +
+    "const __R = __makeRuntime({ write: (s) => __post({ t: \"out\", s: String(s) }), ask: (q) => { const a = prompt(q || \"Введи значение\"); __post({ t: \"out\", s: (q ? q + \" \" : \"\") + (a === null ? \"\" : a) }); return a === null ? \"\" : a; } });\n" +
+    "try {\n" + js + "\n__post({ t: \"done\" });\n} catch (e) {\n" +
+    "  const m = e && e.isPon ? e.message : e instanceof RangeError ? __R.explain(e) : e instanceof ReferenceError ? \"имя используется раньше, чем объявлено\" : \"внутренняя ошибка: \" + (e && e.message);\n" +
+    "  __post({ t: \"err\", s: (__R.L ? \"Строка \" + __R.L + \": \" : \"\") + m, line: __R.L });\n}\n";
+  sandbox = document.createElement("iframe");
+  sandbox.setAttribute("sandbox", "allow-scripts allow-modals");
+  sandbox.setAttribute("referrerpolicy", "no-referrer");
+  sandbox.style.display = "none";
+  sandbox.srcdoc = "<!doctype html><meta charset=\"utf-8\">\x3Cscript>" + safeScript(boot) + "\x3C/script>";
+  $("run").disabled = true;
+  sandboxTimer = setTimeout(() => finishRun(false, "программа работает слишком долго (больше 20 секунд) и остановлена", 0), 20000);
+  document.body.appendChild(sandbox);
 };
+window.addEventListener("message", (ev) => {
+  if (!sandbox || ev.source !== sandbox.contentWindow) return;
+  const m = ev.data || {};
+  if (m.t === "out") out.textContent += String(m.s) + "\n";
+  else if (m.t === "done") finishRun(true);
+  else if (m.t === "err") finishRun(false, String(m.s), Number(m.line) || 0);
+});
 $("showjs").onclick = () => {
   if (!jsout.classList.contains("hidden")) { jsout.classList.add("hidden"); $("showjs").textContent = "Показать скомпилированный код"; return; }
-  try { jsout.textContent = Y.compile(code.value, { resolve }); }
+  try { jsout.textContent = Y.compile(code.value, { resolve, guard: true }); }
   catch (e) { jsout.textContent = "Ошибка. " + e.message; if (e.line) { errLine = e.line; refresh(); } }
   jsout.classList.remove("hidden");
   $("showjs").textContent = "Скрыть скомпилированный код";

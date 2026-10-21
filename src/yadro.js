@@ -22,35 +22,108 @@
     const d = [];
     for (let i = 0; i <= m; i++) d.push([i]);
     for (let j = 1; j <= n; j++) d[0][j] = j;
-    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
     return d[m][n];
   }
 
-  const LATIN_LOOKALIKE = { a: "а", e: "е", o: "о", p: "р", c: "с", x: "х", y: "у", k: "к", m: "м", t: "т", b: "в", h: "н" };
-  function suggest(word, candidates) {
+  const LATIN_LOOKALIKE = { a: "а", e: "е", o: "о", p: "р", c: "с", x: "х", y: "у", k: "к", m: "м", t: "т", b: "в", h: "н", A: "А", E: "Е", O: "О", P: "Р", C: "С", X: "Х", Y: "У", K: "К", M: "М", T: "Т", B: "В", H: "Н" };
+  const MAX_SUGGEST_LEN = 40;
+  function nearest(word, candidates, limit) {
+    if (word.length > MAX_SUGGEST_LEN) return { list: [], d: Infinity };
     const w = word.toLowerCase().replace(/[a-z]/g, (c) => LATIN_LOOKALIKE[c] || c);
-    let best = null, bestD = Infinity;
-    const lim = word.length <= 3 ? 1 : 2;
-    for (const c of candidates) {
-      if (c === word) continue;
+    const lim = limit !== undefined ? limit : word.length <= 3 ? 1 : 2;
+    let list = [], bestD = Infinity;
+    for (const c of new Set(candidates)) {
+      if (c === word || Math.abs(c.length - w.length) > lim) continue;
       const dd = levenshtein(w, c.toLowerCase());
-      if (dd <= lim && dd < bestD) { best = c; bestD = dd; }
+      if (dd > lim) continue;
+      if (dd < bestD) { list = [c]; bestD = dd; } else if (dd === bestD) list.push(c);
     }
-    return best ? " Может быть, «" + best + "»?" : "";
+    return { list, d: bestD };
+  }
+  function suggest(word, candidates) {
+    const { list } = nearest(word, candidates);
+    if (!list.length) return "";
+    return " Возможно, вы имели в виду " + list.slice(0, 3).map((x) => "«" + x + "»").join(" или ") + "?";
+  }
+  function autoKeyword(word, candidates) {
+    if (word.length < 3) return null;
+    const { list, d } = nearest(word, candidates, 1);
+    return list.length === 1 && d <= 1 ? list[0] : null;
   }
 
-  function tokenize(src, file, baseLine, baseCol) {
+  const BIDI = /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/;
+  const INVISIBLE = /[\u200B-\u200D\u2060\u00AD\u180E\uFEFF]/;
+  const hex4 = (ch) => "U+" + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+  const LETTER = /[\p{Script=Cyrillic}\p{Script=Latin}]/u;
+  const IS_CYR = /\p{Script=Cyrillic}/u;
+  const IS_LAT = /\p{Script=Latin}/u;
+  const MAX_IDENT = 255;
+  const MAX_DEPTH = 200;
+  function mixedScript(name) {
+    for (const part of name.split("_")) if (IS_CYR.test(part) && IS_LAT.test(part)) return part;
+    return null;
+  }
+  const toCyr = (s) => s.replace(/[A-Za-z]/g, (c) => LATIN_LOOKALIKE[c] || c);
+
+  const TRANSLIT = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "yo", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh", щ: "shch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya", і: "i", ї: "yi", є: "ye", ґ: "g", ў: "u" };
+  function transliterate(name) {
+    let out = "";
+    for (const c of name) {
+      const l = c.toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(TRANSLIT, l)) { const t = TRANSLIT[l]; out += c !== l && t ? t[0].toUpperCase() + t.slice(1) : t; }
+      else if (/[A-Za-z0-9_]/.test(c)) out += c;
+      else out += "_u" + c.codePointAt(0).toString(16) + "_";
+    }
+    if (!out) out = "_";
+    if (/^[0-9]/.test(out)) out = "_" + out;
+    return out;
+  }
+  function makeRenamer(reserved, convert, nfkc) {
+    const fwd = new Map(), used = new Set();
+    const key = (x) => (nfkc && x.normalize ? x.normalize("NFKC") : x);
+    const fn = (n) => {
+      if (fwd.has(n)) return fwd.get(n);
+      const base = convert ? convert(n) : n;
+      let c = base, k = 1;
+      while (reserved.has(c) || used.has(key(c))) c = k === 1 ? base + "_" : base + "_" + k, k++;
+      fwd.set(n, c);
+      used.add(key(c));
+      return c;
+    };
+    fn.map = fwd;
+    return fn;
+  }
+
+  function tokenize(src, file, baseLine, baseCol, warn) {
+    if (typeof src !== "string") src = String(src);
+    if (src.normalize) src = src.normalize("NFC");
+    if (!baseLine) {
+      let ln = 1, ls = 0;
+      for (let k = 0; k < src.length; k++) {
+        const ch = src[k];
+        if (ch === "\n") { ln++; ls = k + 1; continue; }
+        const bidi = BIDI.test(ch);
+        if (bidi || (INVISIBLE.test(ch) && !(ch === "\uFEFF" && k === 0)))
+          throw new CompileError((bidi ? "невидимый символ направления текста " + hex4(ch) + ": из-за него код может выглядеть не так, как работает (атака Trojan Source, CVE-2021-42574)" : "невидимый символ " + hex4(ch)) + ". Удалите его; если он действительно нужен внутри строки, напишите \\u{" + ch.codePointAt(0).toString(16).toUpperCase() + "}", ln, k - ls + 1, file);
+      }
+    }
     const tokens = [];
     let i = 0, line = baseLine || 1, lineStart = 0;
     const firstLine = line;
     const colOf = (k) => (line === firstLine && baseCol ? baseCol - 1 : 0) + k - lineStart + 1;
     const err = (msg, k) => { throw new CompileError(msg, line, colOf(k === undefined ? i : k), file); };
-    const isLetter = (c) => /[A-Za-zА-Яа-яЁё_]/.test(c);
+    const isLetter = (c) => c === "_" || LETTER.test(c);
     const isDigit = (c) => c >= "0" && c <= "9";
     const push = (t, v, k, extra) => tokens.push(Object.assign({ t, v, line, col: colOf(k), file }, extra || {}));
     while (i < src.length) {
       const c = src[i];
       const start = i;
+      if (BIDI.test(c)) err("в программе есть невидимый символ направления текста " + hex4(c) + ". Из-за него код может выглядеть не так, как работает (атака Trojan Source, CVE-2021-42574). Удалите его; если он нужен внутри строки, напишите \\u{" + c.codePointAt(0).toString(16).toUpperCase() + "}");
+      if (INVISIBLE.test(c) && !(c === "\uFEFF" && i === 0)) err("в программе есть невидимый символ " + hex4(c) + ". Удалите его; если он нужен внутри строки, напишите \\u{" + c.codePointAt(0).toString(16).toUpperCase() + "}");
       if (c === "\n") { push("nl", undefined, i); line++; i++; lineStart = i; continue; }
       if (c === " " || c === "\t" || c === "\r" || c === "\uFEFF") { i++; continue; }
       if (c === "#" || (c === "/" && src[i + 1] === "/")) { while (i < src.length && src[i] !== "\n") i++; continue; }
@@ -65,10 +138,19 @@
           if (ch === "\n") err("строка не закрыта кавычкой", start);
           if (c === "«" && ch === "«") depthQ++;
           if (c === "«" && ch === "»") depthQ--;
+          if (BIDI.test(ch) || INVISIBLE.test(ch)) err("внутри строки невидимый символ " + hex4(ch) + (BIDI.test(ch) ? " (направление текста, атака Trojan Source, CVE-2021-42574)" : "") + ". Если он действительно нужен, напишите \\u{" + ch.codePointAt(0).toString(16).toUpperCase() + "}", i);
+          if (ch === "\\" && src[i + 1] === "u") {
+            const m = /^\\u\{([0-9A-Fa-f]{1,6})\}/.exec(src.slice(i, i + 10));
+            const cp = m ? parseInt(m[1], 16) : -1;
+            if (!m || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) err("после «\\u» нужен код символа в фигурных скобках, например \\u{263A}", i);
+            s += String.fromCodePoint(cp);
+            i += m[0].length;
+            continue;
+          }
           if (ch === "\\") {
             const e = src[i + 1];
-            const map = { n: "\n", t: "\t", '"': '"', "\\": "\\", "{": "{", "}": "}", "«": "«", "»": "»" };
-            if (!(e in map)) err("непонятная последовательность «\\" + (e || "") + "» в строке", i);
+            const map = { n: "\n", t: "\t", r: "\r", '"': '"', "\\": "\\", "{": "{", "}": "}", "«": "«", "»": "»" };
+            if (!Object.prototype.hasOwnProperty.call(map, e)) err("непонятная последовательность «\\" + (e || "") + "» в строке", i);
             s += map[e];
             i += 2;
             continue;
@@ -109,8 +191,21 @@
         let s = "";
         while (i < src.length && (isLetter(src[i]) || isDigit(src[i]))) s += src[i++];
         const low = s.toLowerCase();
-        if (KW.has(low) && (s === low || (s.length > 1 && s === low[0].toUpperCase() + low.slice(1)))) push("kw", low, start);
-        else push("id", s, start);
+        if (s.length > MAX_IDENT) err("слишком длинное имя (больше " + MAX_IDENT + " символов)", start);
+        const isKwForm = (x) => { const l = x.toLowerCase(); return KW.has(l) && (x === l || (x.length > 1 && x === l[0].toUpperCase() + l.slice(1))); };
+        if (isKwForm(s)) { push("kw", s.toLowerCase(), start); continue; }
+        if (s.normalize && s.normalize("NFKC") !== s) err("в имени «" + s + "» есть особая (совместимая) форма буквы. Возможно, вы имели в виду «" + s.normalize("NFKC") + "»?", start);
+        const mixed = mixedScript(s);
+        if (mixed) {
+          const fixed = toCyr(s);
+          if (isKwForm(fixed) && !mixedScript(fixed)) {
+            if (warn) warn({ line, col: colOf(start), file, text: "в слове «" + s + "» есть латинские буквы, похожие на русские; понято как «" + fixed.toLowerCase() + "»" });
+            push("kw", fixed.toLowerCase(), start);
+            continue;
+          }
+          err("в имени «" + s + "» смешаны русские и латинские буквы («" + mixed + "»). Такие имена выглядят одинаково, но это разные имена. " + (!mixedScript(fixed) ? "Возможно, вы имели в виду «" + fixed + "»?" : "Пишите имя одним алфавитом или разделяйте части знаком «_»."), start);
+        }
+        push("id", s, start);
         continue;
       }
       if (src.substr(i, 3) === "?.[") { push("op", "?.[", i); i += 3; continue; }
@@ -119,19 +214,22 @@
       if ("+-*/%^()<>=,[]{}.:".includes(c)) { push("op", c, i); i++; continue; }
       const uni = { "≠": "!=", "≤": "<=", "≥": ">=", "×": "*", "÷": "/" };
       if (uni[c]) { push("op", uni[c], i); i++; continue; }
-      err("непонятный символ «" + c + "»");
+      const cp = src.codePointAt(i);
+      err("непонятный символ «" + String.fromCodePoint(cp) + "» (" + hex4(String.fromCodePoint(cp)) + ")" + (c === "'" ? ". Строки пишутся в двойных кавычках \"…\" или «ёлочках»" : c === ";" ? ". Точка с запятой не нужна: каждая команда пишется с новой строки" : ""));
     }
     push("nl", undefined, i);
     push("eof", undefined, i);
     return tokens;
   }
 
-  function parse(src, file) {
-    return parseTokens(tokenize(src, file), file, false);
+  function parse(src, file, warn) {
+    return parseTokens(tokenize(src, file, 0, 0, warn), file, false, warn, 0);
   }
 
-  function parseTokens(tokens, file, subExpr) {
+  function parseTokens(tokens, file, subExpr, warn, depth0) {
     let p = 0;
+    let depth = depth0 || 0;
+    const fixW = (tok, word) => { if (warn) warn({ line: tok.line, col: tok.col, file: tok.file || file, text: "опечатка «" + tok.v + "» исправлена на «" + word + "»" }); tok.t = "kw"; tok.v = word; tok.fixed = true; };
     const peek = (o) => tokens[Math.min(p + (o || 0), tokens.length - 1)];
     const next = () => tokens[p++];
     const is = (t, v) => peek().t === t && (v === undefined || peek().v === v);
@@ -144,20 +242,25 @@
       if (is(t, v)) return next();
       fail("ожидалось " + (what || "«" + v + "»") + ", а встретилось " + describe(peek()));
     };
-    const expectW = (v) => { if (isW(v)) return next(); fail("ожидалось слово «" + v + "», а встретилось " + describe(peek()) + (peek().t === "id" ? suggest(peek().v, [v]) : "")); };
+    const expectW = (v) => { if (isW(v)) return next(); if (is("id") && autoKeyword(peek().v, [v]) === v) { fixW(peek(), v); return next(); } fail("ожидалось слово «" + v + "», а встретилось " + describe(peek()) + (peek().t === "id" ? suggest(peek().v, [v]) : "")); };
     const expectName = (what) => {
       if (is("id")) return next();
       if (is("kw")) fail("«" + peek().v + "» — служебное слово, его нельзя использовать как " + what);
       fail("ожидалось " + what + ", а встретилось " + describe(peek()));
     };
     const skipNl = () => { while (is("nl")) next(); };
-    const endLine = () => { if (!is("eof")) expect("nl", undefined, "конец строки"); };
+    const endLine = () => { if (!is("eof") && !accept("nl")) fail("ожидался конец строки, а встретилось " + describe(peek()) + ". Каждая команда пишется на отдельной строке"); };
     const pos = (tok) => ({ line: tok.line, col: tok.col, file: tok.file || file });
 
     function block(enders, opener) {
       const body = [];
       skipNl();
-      while (!enders.some((e) => (e === "если ошибка" ? isW("если") && isW("ошибка", 1) : isW(e)))) {
+      for (;;) {
+        if (is("id") && (peek(1).t === "nl" || peek(1).t === "eof")) {
+          const fx = autoKeyword(peek().v, enders.filter((e) => e !== "если ошибка"));
+          if (fx) fixW(peek(), fx);
+        }
+        if (enders.some((e) => (e === "если ошибка" ? isW("если") && isW("ошибка", 1) : isW(e)))) break;
         if (is("eof")) fail("не хватает слова «конец» для «" + opener.v + "» из строки " + opener.line, opener);
         body.push(statement());
         skipNl();
@@ -209,6 +312,15 @@
     function loopBody(tok) { endLine(); const body = block(["конец"], tok); closeEnd(); return body; }
 
     function statement() {
+      if (++depth > MAX_DEPTH) fail("слишком глубокая вложенность (больше " + MAX_DEPTH + " уровней)");
+      try { return statementInner(); } finally { depth--; }
+    }
+    const STMT_WORDS = ["пусть", "константа", "напиши", "если", "пока", "повторить", "для", "функция", "верни", "брось", "выбор", "класс", "структура", "подключи"];
+    function statementInner() {
+      if (is("id") && !["op", "nl", "eof"].includes(peek(1).t)) {
+        const fx = autoKeyword(peek().v, STMT_WORDS);
+        if (fx) fixW(peek(), fx);
+      }
       const tok = peek();
       const P = pos(tok);
       if (accept("kw", "пусть") || accept("kw", "константа")) {
@@ -337,9 +449,10 @@
         while (!isW("конец")) {
           const mt = peek();
           if (is("eof")) fail("не хватает слова «конец» для класса «" + name + "»", tok);
-          if (accept("kw", "функция")) methods.push(funcRest(mt, expectName("имя метода").v, true));
+          if (accept("kw", "функция")) { const mn = expectName("имя метода"); checkMember(mn); methods.push(funcRest(mt, mn.v, true)); }
           else if (accept("kw", "пусть")) {
             const f = expectName("имя поля");
+            checkMember(f);
             typeAnn();
             let value = null;
             if (accept("op", "=")) value = expr();
@@ -365,6 +478,9 @@
       return exprStatement(tok);
     }
 
+    function checkMember(t) {
+      if (/^__/.test(t.v) || INTERNAL_NAMES.has(t.v)) fail("имя «" + t.v + "» служебное для JavaScript и не может быть полем или функцией класса", t);
+    }
     function exprStatement(tok) {
       const P = pos(tok);
       const target = expr();
@@ -403,7 +519,10 @@
       return { k: "if", cond, then, otherwise, ...pos(tok) };
     }
 
-    function expr() { return pipe(); }
+    function expr() {
+      if (++depth > MAX_DEPTH) fail("слишком глубокая вложенность выражения (больше " + MAX_DEPTH + " уровней)");
+      try { return pipe(); } finally { depth--; }
+    }
 
     function pipe() {
       let left = or();
@@ -429,12 +548,14 @@
       return l;
     }
     function not() {
-      if (is("kw", "не")) { const t = next(); return { k: "un", op: "не", e: not(), ...pos(t) }; }
+      if (is("kw", "не")) { const t = next(); if (++depth > MAX_DEPTH) fail("слишком глубокая вложенность выражения"); try { return { k: "un", op: "не", e: not(), ...pos(t) }; } finally { depth--; } }
       return cmp();
     }
     function cmp() {
       let l = add();
+      let n = 0;
       for (;;) {
+        if (n++ === 1 && ((is("op") && ["==", "!=", "<", ">", "<=", ">="].includes(peek().v)) || is("kw", "в"))) fail("сравнения нельзя писать цепочкой: «a < b < c» понимается неоднозначно. Напиши через «и»: a < b и b < c");
         if (is("op") && ["==", "!=", "<", ">", "<=", ">="].includes(peek().v)) { const t = next(); l = { k: "bin", op: t.v, l, r: add(), ...pos(t) }; continue; }
         if (is("kw", "в")) { const t = next(); l = { k: "bin", op: "в", l, r: add(), ...pos(t) }; continue; }
         if (is("kw", "не") && peek(1).t === "kw" && peek(1).v === "в") { const t = next(); next(); l = { k: "un", op: "не", e: { k: "bin", op: "в", l, r: add(), ...pos(t) }, ...pos(t) }; continue; }
@@ -452,8 +573,11 @@
       return l;
     }
     function unary() {
-      if (is("op", "-")) { const t = next(); return { k: "un", op: "-", e: unary(), ...pos(t) }; }
-      if (is("op", "+")) { next(); return unary(); }
+      if (is("op", "-") || is("op", "+")) {
+        const t = next();
+        if (++depth > MAX_DEPTH) fail("слишком глубокая вложенность выражения");
+        try { const e = unary(); return t.v === "-" ? { k: "un", op: "-", e, ...pos(t) } : e; } finally { depth--; }
+      }
       return power();
     }
     function power() {
@@ -496,6 +620,7 @@
           if (t.v === "?.") safe = true;
           const nt = peek();
           if (nt.t !== "id" && nt.t !== "kw") fail("после точки ожидалось имя поля или метода");
+          if (nt.t === "id" && (/^__/.test(nt.v) || INTERNAL_NAMES.has(nt.v))) fail("«" + nt.v + "» — внутреннее имя JavaScript, обращаться к нему из программы нельзя", nt);
           next();
           if (is("op", "(")) { e = { k: "mcall", obj: e, name: nt.v, args: callArgs(), safe, ...pos(nt) }; continue; }
           e = { k: "member", obj: e, name: nt.v, safe, ...pos(nt) };
@@ -510,7 +635,7 @@
       if (accept("num")) return { k: "num", v: tok.v, ...P };
       if (accept("str")) return { k: "str", v: tok.v, ...P };
       if (accept("tmpl")) {
-        const parts = tok.parts.map((pt) => (typeof pt === "string" ? pt : parseTokens(tokenize(pt.src, tok.file || file, pt.line, pt.col), tok.file || file, true)));
+        const parts = tok.parts.map((pt) => (typeof pt === "string" ? pt : parseTokens(tokenize(pt.src, tok.file || file, pt.line, pt.col, warn), tok.file || file, true, warn, depth)));
         return { k: "tmpl", parts, ...P };
       }
       if (accept("kw", "истина")) return { k: "bool", v: true, ...P };
@@ -604,6 +729,8 @@
     }
     return { k: "program", body };
   }
+
+  const INTERNAL_NAMES = new Set(["constructor", "prototype", "__proto__", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString", "toString", "valueOf", "caller", "callee", "arguments", "call", "apply", "bind"]);
 
   const BUILTINS = {
     "спроси": [0, 1], "число": [1, 1], "строка": [1, 1], "длина": [1, 1], "добавь": [2, 2], "убери": [1, 2], "случайное": [0, 2],
@@ -822,18 +949,27 @@
       if (seen.has(res.id)) continue;
       seen.add(res.id);
       const name = res.name || s.path;
-      out.push(...resolveImports(parse(res.source, name), { ...opts, file: name }, seen).body);
+      out.push(...resolveImports(parse(res.source, name, opts.warn), { ...opts, file: name }, seen).body);
     }
     return { k: "program", body: out };
   }
 
   const jsStr = (s) => JSON.stringify(s);
-  const vname = (n) => "$" + n;
+  function jsIdent(n, ascii) {
+    if (!ascii) return "$" + n;
+    return "$" + n.replace(/[^A-Za-z0-9_]/gu, (c) => "$" + c.codePointAt(0).toString(16).padStart(6, "0"));
+  }
+  let ASCII_IDS = false;
+  const vname = (n) => jsIdent(n, ASCII_IDS);
   const OPS = { "+": "plus", "-": "minus", "*": "mul", "/": "div", "%": "mod", "^": "pow", "==": "eq", "!=": "ne", "<": "lt", ">": "gt", "<=": "le", ">=": "ge", "в": "has" };
   const ASSIGN_OPS = { "+=": "plus", "-=": "minus", "*=": "mul", "/=": "div", "%=": "mod" };
 
   function generate(program, opts) {
     opts = opts || {};
+    ASCII_IDS = !!opts.ascii;
+    try { return generateInner(program, opts); } finally { ASCII_IDS = false; }
+  }
+  function generateInner(program, opts) {
     let out = [];
     let ind = 0;
     let uid = 0;
@@ -1038,7 +1174,7 @@
 
   function frontend(src, opts) {
     opts = opts || {};
-    const program = resolveImports(parse(src, opts.file), opts);
+    const program = resolveImports(parse(src, opts.file, opts.warn), opts);
     analyze(program, opts);
     return program;
   }
@@ -1105,15 +1241,18 @@
       if (typeof a !== "number" || typeof b !== "number") fail("нельзя " + opName[name] + " «" + typeName(a) + "» и «" + typeName(b) + "»");
       return f(a, b);
     };
+    const MAX_STR = 1e8;
+    const capStr = (n) => { if (n > MAX_STR) fail("слишком длинная строка (больше 100 миллионов символов)"); };
     const addNums = arith("plus", (x, y) => x + y);
     R.plus = (a, b) => {
-      if (typeof a === "string" || typeof b === "string") return show(a) + show(b);
+      if (typeof a === "string" || typeof b === "string") { const x = show(a), y = show(b); capStr(x.length + y.length); return x + y; }
       if (Array.isArray(a) && Array.isArray(b)) return a.concat(b);
       return addNums(a, b);
     };
     R.minus = arith("minus", (a, b) => a - b);
     const mulNums = arith("mul", (x, y) => x * y);
-    R.mul = (a, b) => (typeof a === "string" && typeof b === "number" ? a.repeat(Math.max(0, Math.floor(b))) : mulNums(a, b));
+    const rep = (a, b) => { const n = Math.max(0, Math.floor(b)); capStr(a.length * n); return a.repeat(n); };
+    R.mul = (a, b) => (typeof a === "string" && typeof b === "number" ? rep(a, b) : mulNums(a, b));
     R.div = arith("div", (a, b) => { if (b === 0) fail("делить на ноль нельзя"); return a / b; });
     R.mod = arith("mod", (a, b) => { if (b === 0) fail("делить на ноль нельзя"); return ((a % b) + b) % b; });
     R.pow = arith("pow", (a, b) => Math.pow(a, b));
@@ -1173,7 +1312,17 @@
       fail("квадратные скобки можно использовать только со списком или словарём");
     };
     const lev = (a, b) => { const d = [...Array(a.length + 1)].map((_, i) => [i]); for (let j = 1; j <= b.length; j++) d[0][j] = j; for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; };
-    const hint = (w, names) => { let best = null, bd = 3; for (const n of names) { const d = lev(w, n); if (d < bd) { bd = d; best = n; } } return best ? " Может быть, «" + best + "»?" : ""; };
+    const hint = (w, names) => { let best = null, bd = 3; for (const n of names) { const d = lev(w, n); if (d < bd) { bd = d; best = n; } } return best ? " Возможно, вы имели в виду «" + best + "»?" : ""; };
+    const own = (t, k) => Object.prototype.hasOwnProperty.call(t, k);
+    const BAD_KEY = /^__/;
+    const INTERNAL = new Set(["constructor", "prototype", "__proto__", "caller", "callee", "arguments"]);
+    const hasMember = (o, k) => {
+      if (typeof k !== "string" || BAD_KEY.test(k) || INTERNAL.has(k)) return false;
+      if (own(o, k)) return true;
+      let p = Object.getPrototypeOf(o);
+      while (p && p !== Object.prototype) { if (own(p, k)) return true; p = Object.getPrototypeOf(p); }
+      return false;
+    };
     const objKeys = (o) => { const s = new Set(Object.keys(o).filter((k) => !k.startsWith("__"))); let p = Object.getPrototypeOf(o); while (p && p !== Object.prototype) { Object.getOwnPropertyNames(p).forEach((k) => k !== "constructor" && !k.startsWith("__") && s.add(k)); p = Object.getPrototypeOf(p); } return [...s]; };
     R.get = (o, k) => {
       if (o == null) fail("нельзя взять «" + k + "» у «ничего». Подсказка: используй «?.», чтобы безопасно пропустить");
@@ -1181,22 +1330,28 @@
       if (k === "длина" && o instanceof Map) return o.size;
       if (o instanceof Map) { if (!o.has(k)) fail("в словаре нет ключа «" + k + "»." + hint(k, [...o.keys()].filter((x) => typeof x === "string"))); return o.get(k); }
       if (isObj(o)) {
-        if (k in o) { const v = o[k]; return typeof v === "function" ? v.bind(o) : v; }
+        if (hasMember(o, k)) { const v = o[k]; return typeof v === "function" ? v.bind(o) : v; }
         fail("у «" + o.__cls + "» нет поля «" + k + "»." + hint(k, objKeys(o)));
       }
-      const m = methodsFor(o)[k];
+      const mt = methodsFor(o);
+      const m = own(mt, k) ? mt[k] : null;
       if (m) return (...a) => m(o, ...a);
       fail("у значения типа «" + typeName(o) + "» нет поля «" + k + "»");
     };
     R.sget = (o, k) => {
       if (o == null) return null;
       if (o instanceof Map) return o.has(k) ? o.get(k) : null;
-      if (isObj(o) && !(k in o)) return null;
+      if (isObj(o) && !hasMember(o, k)) return null;
       return R.get(o, k);
     };
     R.set = (o, k, v) => {
       if (o instanceof Map) { mutate(o); o.set(k, v); return; }
-      if (isObj(o)) { mutate(o); o[k] = v; return; }
+      if (isObj(o)) {
+        if (typeof k !== "string" || BAD_KEY.test(k) || INTERNAL.has(k)) fail("«" + k + "» — внутреннее имя, его нельзя менять");
+        mutate(o);
+        Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+        return;
+      }
       if (o == null) fail("нельзя записать «" + k + "» в «ничего». Подсказка: «?.» пропустит запись, если там ничего");
       fail("нельзя добавить поле «" + k + "» значению типа «" + typeName(o) + "»");
     };
@@ -1208,7 +1363,7 @@
       "обрезать": (s) => s.trim(), "содержит": (s, x) => s.includes(needStr(x, "что искать")), "заменить": (s, a, b) => s.split(needStr(a, "что заменить")).join(show(b)),
       "разделить": (s, sep) => (sep === undefined || sep === null ? s.split(/\s+/).filter(Boolean) : s.split(needStr(sep, "разделитель"))),
       "начинается": (s, x) => s.startsWith(needStr(x)), "заканчивается": (s, x) => s.endsWith(needStr(x)),
-      "повтори": (s, n) => s.repeat(Math.max(0, Math.floor(needNum(n, "количество")))), "срез": (s, a, b) => s.slice(needNum(a, "начало"), b === undefined ? undefined : needNum(b, "конец")),
+      "повтори": (s, n) => rep(s, needNum(n, "количество")), "срез": (s, a, b) => s.slice(needNum(a, "начало"), b === undefined ? undefined : needNum(b, "конец")),
       "найди": (s, x) => s.indexOf(needStr(x)), "символы": (s) => [...s], "длина": (s) => s.length, "число": (s) => R.b["число"](s),
       "с_заглавной": (s) => s.charAt(0).toUpperCase() + s.slice(1), "перевёрнуто": (s) => [...s].reverse().join(""),
     };
@@ -1237,12 +1392,13 @@
     R.call = (o, k, args) => {
       if (o == null) fail("нельзя вызвать «" + k + "» у «ничего». Подсказка: используй «?.»");
       if (isObj(o)) {
-        if (typeof o[k] === "function") return o[k](...args);
-        if (k in o) fail("«" + k + "» у «" + o.__cls + "» — это поле, а не функция");
+        if (hasMember(o, k) && typeof o[k] === "function") return o[k](...args);
+        if (hasMember(o, k)) fail("«" + k + "» у «" + o.__cls + "» — это поле, а не функция");
         fail("у «" + o.__cls + "» нет функции «" + k + "»." + hint(k, objKeys(o)));
       }
       if (o instanceof Map && o.has(k) && typeof o.get(k) === "function") return o.get(k)(...args);
-      const m = methodsFor(o)[k];
+      const mt = methodsFor(o);
+      const m = own(mt, k) ? mt[k] : null;
       if (!m) fail("у значения типа «" + typeName(o) + "» нет функции «" + k + "»." + hint(k, Object.keys(methodsFor(o))));
       return m(o, ...args);
     };
@@ -1267,7 +1423,17 @@
       return v;
     };
     R.userError = (v) => new PonError(typeof v === "string" ? v : show(v), v);
-    R.errValue = (e) => (e && e.isPon ? e.ponValue : e instanceof RangeError ? "слишком глубокая рекурсия" : String((e && e.message) || e));
+    R.errValue = (e) => (e && e.isPon ? e.ponValue : R.explain(e));
+    R.explain = (e) => {
+      if (e instanceof RangeError) {
+        const m = String(e.message);
+        if (/call stack/i.test(m)) return "слишком глубокая рекурсия — функция вызывает себя слишком много раз";
+        if (/string length/i.test(m)) return "слишком длинная строка — не хватает памяти";
+        if (/array length/i.test(m)) return "слишком длинный список — не хватает памяти";
+        return "число или размер вне допустимых пределов";
+      }
+      return String((e && e.message) || e);
+    };
     R.rethrowFatal = (e) => { if (e && e.fatal) throw e; };
     const toNum = (v) => {
       if (typeof v === "number") return v;
@@ -1317,7 +1483,7 @@
     } catch (e) {
       let msg;
       if (e && e.isPon) msg = e.message;
-      else if (e instanceof RangeError) msg = "слишком глубокая рекурсия — функция вызывает себя слишком много раз";
+      else if (e instanceof RangeError) msg = R.explain(e);
       else if (e instanceof ReferenceError) msg = "имя используется раньше, чем объявлено";
       else msg = "внутренняя ошибка: " + (e && e.message);
       const err = new Error((R.L ? "Строка " + R.L + ": " : "") + msg);
@@ -1330,7 +1496,7 @@
   function run(src, io) {
     io = io || {};
     const lines = [];
-    const js = compile(src, { file: io.file, resolve: io.resolve, guard: io.guard !== false });
+    const js = compile(src, { file: io.file, resolve: io.resolve, guard: io.guard !== false, warn: io.warn });
     execute(js, { write: (s) => { lines.push(s); if (io.write) io.write(s); }, ask: io.ask || (() => ""), fs: io.fs, maxSteps: io.maxSteps });
     return lines;
   }
@@ -1353,14 +1519,14 @@
       "const __makeRuntime = " + makeRuntime.toString() + ";\n" +
       "const __ask = " + nodeAsk.toString() + ";\n" +
       "const __fs = require(\"fs\");\n" +
-      "if (process.platform === \"win32\") { try { require(\"child_process\").execSync(\"chcp 65001\", { stdio: \"ignore\" }); } catch (e) {} }\n" +
+      "if (process.platform === \"win32\") { try { require(\"child_process\").execFileSync(require(\"path\").join(process.env.SystemRoot || \"C:\\\\Windows\", \"System32\", \"chcp.com\"), [\"65001\"], { stdio: \"ignore\", windowsHide: true }); } catch (e) {} }\n" +
       "const __R = __makeRuntime({ write: (s) => process.stdout.write(s + \"\\n\"), ask: (q) => __ask(__fs, q), fs: __fs, maxSteps: Infinity });\n" +
       "try {\n" + js + "\n} catch (e) {\n" +
-      "  const m = e && e.isPon ? e.message : e instanceof RangeError ? \"слишком глубокая рекурсия\" : String((e && e.message) || e);\n" +
+      "  const m = e && e.isPon ? e.message : __R.explain(e);\n" +
       "  process.stderr.write(\"Ошибка. \" + (__R.L ? \"Строка \" + __R.L + \": \" : \"\") + m + \"\\n\");\n" +
       "  process.exitCode = 1;\n" +
       "}\n";
   }
 
-  return { tokenize, parse, analyze, generate, frontend, compile, run, execute, standalone, makeRuntime, nodeAsk, resolveImports, CompileError, suggest, levenshtein, KEYWORDS: ALL_WORDS, RESERVED, BUILTINS, TYPES };
+  return { transliterate, makeRenamer, jsIdent, nearest, autoKeyword, mixedScript, MAX_DEPTH, tokenize, parse, analyze, generate, frontend, compile, run, execute, standalone, makeRuntime, nodeAsk, resolveImports, CompileError, suggest, levenshtein, KEYWORDS: ALL_WORDS, RESERVED, BUILTINS, TYPES };
 });

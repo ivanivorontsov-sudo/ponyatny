@@ -118,6 +118,15 @@
   const PY_KEYWORDS = new Set(["False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield", "print", "input", "len", "list", "dict", "str", "int", "float", "range", "math", "random"]);
   const JS_KEYWORDS = new Set(["break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "finally", "for", "function", "if", "import", "in", "instanceof", "new", "return", "super", "switch", "this", "throw", "try", "typeof", "var", "void", "while", "with", "yield", "let", "static", "await", "length", "Math", "console"]);
 
+  const CS_KEYWORDS = new Set(["abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked", "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float", "for", "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock", "long", "namespace", "new", "null", "object", "operator", "out", "override", "params", "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "virtual", "void", "volatile", "while", "dynamic", "var", "System", "Console", "Math", "Func", "Action", "List", "Dictionary", "Exception", "Main", "Program", "Помощь"]);
+  function preludeNames(L) {
+    const src = (L === "python" ? PY_PRELUDE : L === "javascript" ? JS_PRELUDE : CS_PRELUDE);
+    const out = new Set();
+    const re = L === "python" ? /^(?:def|class)\s+([^\s(:]+)|^([^\s=]+)\s*=/gmu : L === "javascript" ? /(?:const|let|function|class)\s+([^\s=(]+)/gu : /class\s+([^\s{:]+)/gu;
+    let m;
+    while ((m = re.exec(src))) out.add(m[1] || m[2]);
+    return out;
+  }
   function translate(src, lang, opts) {
     opts = opts || {};
     const program = Y.frontend(src, { file: opts.file, resolve: opts.resolve });
@@ -125,8 +134,8 @@
     if (!L) throw new Error("не знаю язык «" + lang + "». Можно: python, javascript, csharp");
     const notes = [];
     const note = (n, text) => { notes.push({ line: n.line, text }); if (typeof pending !== "undefined" && pending && !pending.includes(text)) pending.push(text); return text; };
-    const reserved = L === "python" ? PY_KEYWORDS : L === "javascript" ? JS_KEYWORDS : new Set();
-    const nm = (n) => (reserved.has(n) ? n + "_" : n);
+    const reserved = new Set([...(L === "python" ? PY_KEYWORDS : L === "javascript" ? JS_KEYWORDS : CS_KEYWORDS), ...preludeNames(L)]);
+    const nm = Y.makeRenamer(reserved, opts.latin ? Y.transliterate : null, L === "python");
     const out = [];
     let ind = 0;
     let tmp = 0;
@@ -179,7 +188,7 @@
         case "super":
           if (L === "python") return "super()." + (e.name === "создать" ? "__init__" : nm(e.name)) + "(" + e.args.map((x) => E(x)).join(", ") + ")";
           if (L === "javascript") return e.name === "создать" ? "super(" + e.args.map((x) => E(x)).join(", ") + ")" : "super." + nm(e.name) + "(" + e.args.map((x) => E(x)).join(", ") + ")";
-          return "base." + e.name + "(" + e.args.map((x) => E(x)).join(", ") + ")";
+          return "base." + nm(e.name) + "(" + e.args.map((x) => E(x)).join(", ") + ")";
         case "call": {
           if (e.fn.k === "name" && e.fn.ref === "builtin") return builtin(e, e.fn.name, e.args);
           if (e.fn.k === "name" && e.fn.ref === "class") return newObj(e.fn.name, e.args);
@@ -198,7 +207,7 @@
           if (!e.body) {
             if (L === "python") return wrap("lambda " + ps + ": " + E(e.value), prec, 0);
             if (L === "javascript") return "(" + ps + ") => " + E(e.value, 1);
-            return "new Func<" + e.params.map(() => "dynamic, ").join("") + "dynamic>((" + e.params.map((q) => "dynamic " + q.name).join(", ") + ") => " + E(e.value) + ")";
+            return "new Func<" + e.params.map(() => "dynamic, ").join("") + "dynamic>((" + e.params.map((q) => "dynamic " + nm(q.name)).join(", ") + ") => " + E(e.value) + ")";
           }
           if (L === "javascript") {
             const saved = out.length; const si = ind; ind = 0;
@@ -257,12 +266,12 @@
       if (e.name === "длина") return L === "python" ? "len(" + E(e.obj) + ")" : L === "javascript" ? "длина(" + E(e.obj) + ")" : "Помощь.Длина(" + E(e.obj) + ")";
       if (L === "python") {
         if (e.obj.k === "this") return "self." + nm(e.name);
-        if (e.safe) return "(" + o + ".get(" + JSON.stringify(e.name) + ") if isinstance(" + o + ", dict) else getattr(" + o + ", " + JSON.stringify(e.name) + ", None))";
+        if (e.safe) return "(" + o + ".get(" + JSON.stringify(e.name) + ") if isinstance(" + o + ", dict) else getattr(" + o + ", " + JSON.stringify(nm(e.name)) + ", None))";
         if (isDictLike(e.obj)) return o + "[" + JSON.stringify(e.name) + "]";
         return o + "." + nm(e.name);
       }
       if (L === "javascript") return o + (e.safe ? "?." : ".") + nm(e.name);
-      return o + (e.safe ? "?." : ".") + e.name;
+      return o + (e.safe ? "?." : ".") + nm(e.name);
     }
     function isDictLike(o) { return o.k === "dict" || (o.k === "name" && dictVars.has(o.name)) || (o.k === "index") || (o.k === "member" && o.safe); }
     const dictVars = new Set();
@@ -448,7 +457,7 @@
           const v = E(s.value);
           if (L === "python") emit(nm(s.name) + " = " + v);
           else if (L === "javascript") emit((s.kind === "let" ? "let " : "const ") + nm(s.name) + " = " + (s.kind === "forever" ? "Object.freeze(" + v + ")" : v) + ";");
-          else emit("dynamic " + s.name + " = " + v + ";");
+          else emit("dynamic " + nm(s.name) + " = " + v + ";");
           return;
         }
         case "assign": {
@@ -549,9 +558,9 @@
             emit("}");
           } else {
             const isInit = inClass && s.name === "создать";
-            if (isInit) emit("public " + inClass.name + "(" + ps.join(", ") + ")" + (inClass.parent ? " : base()" : ""));
+            if (isInit) emit("public " + nm(inClass.name) + "(" + ps.join(", ") + ")" + (inClass.parent ? " : base()" : ""));
             else if (inClass && s.name === "строкой") emit("public override string ToString()");
-            else emit((inClass ? "public virtual " : "static ") + "dynamic " + s.name + "(" + ps.join(", ") + ")");
+            else emit((inClass ? "public virtual " : "static ") + "dynamic " + nm(s.name) + "(" + ps.join(", ") + ")");
             emit("{");
             ind++; block(s.body); if (!isInit && !(inClass && s.name === "строкой") && !(s.body.length && s.body[s.body.length - 1].k === "return")) emit("return null;"); ind--;
             emit("}");
@@ -644,7 +653,7 @@
             ind--;
             emit("}");
           } else {
-            emit("class " + s.name + (s.parent ? " : " + s.parent : ""));
+            emit("class " + nm(s.name) + (s.parent ? " : " + nm(s.parent) : ""));
             emit("{");
             ind++;
             const fields = new Set(s.fields.map((f) => f.name));
@@ -677,11 +686,11 @@
             ind--;
             emit("}");
           } else {
-            emit("class " + s.name);
+            emit("class " + nm(s.name));
             emit("{");
             ind++;
-            ps.forEach((q) => emit("public dynamic " + q.name + ";"));
-            emit("public " + s.name + "(" + ps.map((q) => "dynamic " + q.name + (q.def ? " = " + E(q.def) : "")).join(", ") + ") { " + ps.map((q) => "this." + q.name + " = " + q.name + ";").join(" ") + " }");
+            ps.forEach((q) => emit("public dynamic " + nm(q.name) + ";"));
+            emit("public " + nm(s.name) + "(" + ps.map((q) => "dynamic " + nm(q.name) + (q.def ? " = " + E(q.def) : "")).join(", ") + ") { " + ps.map((q) => "this." + nm(q.name) + " = " + nm(q.name) + ";").join(" ") + " }");
             ind--;
             emit("}");
           }

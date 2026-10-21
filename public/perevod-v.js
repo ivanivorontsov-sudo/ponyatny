@@ -56,7 +56,7 @@
           continue;
         }
         if ((m = raw.slice(i).match(/^\d[\d_]*(\.\d+)?([eE][+-]?\d+)?|^\.\d+/))) { toks.push({ t: "num", v: parseFloat(m[0].replace(/_/g, "")), line: ln + 1, col }); i += m[0].length; continue; }
-        if ((m = raw.slice(i).match(/^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё]*/))) { toks.push({ t: "name", v: m[0], line: ln + 1, col }); i += m[0].length; continue; }
+        if ((m = raw.slice(i).match(/^[\p{L}_][\p{L}\p{N}\p{Mn}\p{Mc}_]*/u))) { toks.push({ t: "name", v: m[0].normalize("NFKC"), line: ln + 1, col }); i += m[0].length; continue; }
         if ((m = raw.slice(i).match(/^(\*\*=|\/\/=|\*\*|\/\/|==|!=|<=|>=|\+=|-=|\*=|\/=|%=|->|:=|[-+*\/%<>=()\[\]{},.:;@~|&^])/))) {
           const op = m[0];
           if ("([{".includes(op)) depth++;
@@ -508,6 +508,21 @@
   }
   const usesName = (x, n) => JSON.stringify(x).includes("\"v\":\"" + n + "\"");
 
+  function toPonIdent(n) {
+    let out = "", prev = null;
+    for (const c of String(n).normalize("NFKC")) {
+      let cur = null;
+      if (/\p{Script=Cyrillic}/u.test(c) && /\p{L}/u.test(c)) cur = "cyr";
+      else if (/\p{Script=Latin}/u.test(c) && /\p{L}/u.test(c)) cur = "lat";
+      if (cur) { if (prev && prev !== cur && !out.endsWith("_")) out += "_"; out += c; prev = cur; }
+      else if (/[0-9_]/.test(c)) out += c;
+      else { out += (out && !out.endsWith("_") ? "_" : "") + "u" + c.codePointAt(0).toString(16) + "_"; prev = "lat"; }
+    }
+    if (!out) out = "_";
+    if (/^[0-9]/.test(out)) out = "_" + out;
+    return out.slice(0, 200);
+  }
+
   function irToPon(ir, from) {
     const lines = [];
     const notes = [];
@@ -515,7 +530,8 @@
     const emit = (s) => lines.push("    ".repeat(ind) + s);
     let pending = [];
     const pnote = (text) => { if (!pending.includes(text)) pending.push(text); };
-    const nm = (n) => (PON_RESERVED.has(n) ? n + "_" : n);
+    const rename = Y.makeRenamer(PON_RESERVED, toPonIdent, false);
+    const nm = (n) => rename(from === "python" ? String(n).normalize("NFKC") : n);
     const scopes = [];
     let classCtx = null;
 
@@ -929,5 +945,5 @@
     return r;
   }
 
-  return { translateToPon, pyParse, jsToIR, TranslateError };
+  return { toPonIdent, translateToPon, pyParse, jsToIR, TranslateError };
 });
