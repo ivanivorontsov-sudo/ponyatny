@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const Y = require("./yadro");
-const VERSION = "2.1.0-beta.1";
+const VERSION = "2.2.0-beta.1";
 const MAGIC = Buffer.from("PONYATNY", "ascii");
 
 if (process.platform === "win32") { try { require("child_process").execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "chcp.com"), ["65001"], { stdio: "ignore", windowsHide: true }); } catch (e) {} }
@@ -40,6 +40,8 @@ function errOut(s) { process.stderr.write(s + "\n"); }
 
 function resolver(baseFile) {
   return (p, from) => {
+    const sm = String(p).match(/^(?:стд|std)\/([^\/\\]+?)(?:\.pon)?$/i);
+    if (sm) { const STD = require("./std.js"); const name = sm[1].toLowerCase(); if (!Object.prototype.hasOwnProperty.call(STD, name)) return null; return { id: "стд:" + name, name: "стд/" + name + ".pon", source: STD[name] }; }
     const dir = path.dirname(from && fs.existsSync(from) ? from : baseFile);
     let full = path.resolve(dir, p);
     if (!/\.pon$/i.test(full)) full += ".pon";
