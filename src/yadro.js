@@ -4,6 +4,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   const RESERVED = ["пусть", "константа", "навсегда", "напиши", "если", "то", "иначе", "пока", "повторить", "для", "функция", "верни", "конец", "и", "или", "не", "истина", "ложь", "ничего", "стоп", "дальше", "попробуй", "брось", "выбор", "вариант", "когда", "класс", "структура", "это", "себя", "родитель", "новый", "подключи", "в", "затем"];
   const CONTEXT = ["каждого", "из", "от", "до", "шаг", "раз", "ошибка", "как", "наконец", "наследует"];
+  const ALIASES = { "пиши": "напиши", "повтори": "повторить", "пробуй": "попробуй", "конст": "константа" };
   const KW = new Set(RESERVED);
   const ALL_WORDS = RESERVED.concat(CONTEXT);
 
@@ -194,6 +195,7 @@
         if (s.length > MAX_IDENT) err("слишком длинное имя (больше " + MAX_IDENT + " символов)", start);
         const isKwForm = (x) => { const l = x.toLowerCase(); return KW.has(l) && (x === l || (x.length > 1 && x === l[0].toUpperCase() + l.slice(1))); };
         if (isKwForm(s)) { push("kw", s.toLowerCase(), start); continue; }
+        if (Object.prototype.hasOwnProperty.call(ALIASES, low) && (s === low || s === low[0].toUpperCase() + low.slice(1))) { push("kw", ALIASES[low], start); continue; }
         if (s.normalize && s.normalize("NFKC") !== s) err("в имени «" + s + "» есть особая (совместимая) форма буквы. Возможно, вы имели в виду «" + s.normalize("NFKC") + "»?", start);
         const mixed = mixedScript(s);
         if (mixed) {
@@ -1537,5 +1539,5 @@
       "}\n";
   }
 
-  return { transliterate, makeRenamer, jsIdent, nearest, autoKeyword, mixedScript, MAX_DEPTH, tokenize, parse, analyze, generate, frontend, compile, run, execute, standalone, makeRuntime, nodeAsk, resolveImports, CompileError, suggest, levenshtein, KEYWORDS: ALL_WORDS, RESERVED, BUILTINS, TYPES };
+  return { transliterate, makeRenamer, jsIdent, nearest, autoKeyword, mixedScript, MAX_DEPTH, tokenize, parse, analyze, generate, frontend, compile, run, execute, standalone, makeRuntime, nodeAsk, resolveImports, CompileError, suggest, levenshtein, KEYWORDS: ALL_WORDS.concat(Object.keys(ALIASES)), ALIASES, RESERVED, BUILTINS, TYPES };
 });

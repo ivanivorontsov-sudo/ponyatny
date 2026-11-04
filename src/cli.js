@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const Y = require("./yadro");
-const VERSION = "2.2.0-beta.1";
+const VERSION = "2.3.0-beta.1";
 const MAGIC = Buffer.from("PONYATNY", "ascii");
 
 if (process.platform === "win32") { try { require("child_process").execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "chcp.com"), ["65001"], { stdio: "ignore", windowsHide: true }); } catch (e) {} }
