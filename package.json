@@ -1,6 +1,6 @@
 {
   "name": "ponyatny",
-  "version": "2.3.0-beta.1",
+  "version": "2.3.0",
   "private": true,
   "description": "Понятный — язык программирования на русском: компилятор в JavaScript, сборка .exe и переводчик",
   "bin": { "ponyatny": "src/cli.js" },
