@@ -371,7 +371,8 @@
         case "PonNote": return { t: "note", text: n.text, line };
         case "PonEnum": return { t: "enum", name: n.name, items: n.items.map((it) => ({ name: it.name, value: it.value ? E(it.value) : null })), line };
         case "PonInterface": return { t: "iface", name: n.name, methods: n.methods.map((m) => ({ name: m.name, params: params(m.params) })), line };
-        case "PonStruct": return { t: "struct", name: n.name, fields: n.fields, line };
+        case "PonStruct": return { t: "struct", name: n.name, fields: n.fields.map((f) => (typeof f === "string" ? { name: f, value: null } : { name: f.name, value: f.value ? E(f.value) : null })), line };
+        case "PonAssert": return { t: "assert", test: E(n.test), msg: n.message ? E(n.message) : null, line };
         case "PonWarn": return { t: "expr", e: { t: "call", fn: { t: "name", v: "\u0001warn" }, args: n.arguments.map(E), kw: [] }, line };
         case "VariableDeclaration":
           return n.declarations.map((d) => (d.id.type === "ArrayPattern" && d.init && d.id.elements.every((x) => x && x.type === "Identifier") ? { t: "assign", targets: [{ t: "tuple", items: d.id.elements.map((x) => ({ t: "name", v: x.name })) }], op: "=", value: E(d.init), line, decl: n.kind } : d.id.type === "Identifier" ? { t: "assign", targets: [{ t: "name", v: d.id.name }], op: "=", value: d.init ? E(d.init) : { t: "null" }, line, decl: n.kind } : { t: "note", text: "деструктуризация не переводится", line }));
@@ -809,6 +810,7 @@
           return "родитель." + m + "(" + a.join(", ") + ")";
         }
         if (from === "python" && f.name === "join" && e.args.length === 1) return E(e.args[0], 9) + ".соедини(" + E(o) + ")";
+        if (/^__пон_/.test(f.name)) return E(o, 9) + "." + f.name.slice(6) + "(" + a.join(", ") + ")";
         if (f.name === "__получи" || f.name === "__убери") return E(o, 9) + "." + f.name.slice(2) + "(" + a.join(", ") + ")";
         if (from === "javascript" && f.name === "join" && o.t === "call" && o.fn.t === "attr" && o.fn.name === "map" && o.args[0] && o.args[0].t === "lambda" && o.args[0].body.t === "call" && o.args[0].body.fn.v === "показать") return E(o.fn.obj, 9) + ".соедини(" + a.join(", ") + ")";
         const isSelf = o.t === "name" && o.v === "self";
@@ -830,7 +832,7 @@
     }
 
     function handlerOut(type, errName, body, typed) {
-      emit("если ошибка" + (type ? " " + nm(type) : "") + (errName ? " как " + nm(errName) : ""));
+      emit("если ошибка " + (type ? nm(type) : "Ошибка") + (errName ? " как " + nm(errName) : ""));
       let h = body;
       if (errName && !typed) {
         const n = errName;
@@ -974,7 +976,7 @@
           emit("конец");
           return;
         }
-        case "struct": emit("структура " + nm(s.name) + "(" + s.fields.map((f) => nm(f) + " = ничего").join(", ") + ")"); return;
+        case "struct": emit("структура " + nm(s.name) + "(" + s.fields.map((f) => (typeof f === "string" ? nm(f) + " = ничего" : nm(f.name) + " = " + (f.value ? E(f.value) : "ничего"))).join(", ") + ")"); return;
         case "forRange": emit("для " + nm(s.v) + " от " + E(s.from) + " до " + E(s.to) + (s.step ? " шаг " + E(s.step) : s.down ? "" : " шаг 1")); inner(s.body); emit("конец"); return;
         case "for": {
           const it = s.iter;

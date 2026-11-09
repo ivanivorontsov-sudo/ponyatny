@@ -334,7 +334,7 @@
           const fx = autoKeyword(peek().v, enders.filter((e) => e !== "если ошибка"));
           if (fx) fixW(peek(), fx);
         }
-        if (enders.some((e) => (e === "если ошибка" ? isW("если") && isW("ошибка", 1) : e === "если ошибка тип" ? isW("если") && isW("ошибка", 1) && peek(2).t === "id" : isW(e)))) break;
+        if (enders.some((e) => (e === "если ошибка" ? isW("если") && isW("ошибка", 1) : e === "если ошибка тип" ? isW("если") && isW("ошибка", 1) && (peek(2).t === "id" || isW("как", 2)) : isW(e)))) break;
         if (is("eof")) fail("не хватает слова «конец» для «" + opener.v + "» из строки " + opener.line, opener);
         body.push(statement());
         skipNl();
@@ -1580,7 +1580,8 @@
     R.minus = arith("minus", (a, b) => a - b);
     const mulNums = arith("mul", (x, y) => x * y);
     const rep = (a, b) => { const n = Math.max(0, Math.floor(b)); capStr(a.length * n); return a.repeat(n); };
-    R.mul = (a, b) => (typeof a === "string" && typeof b === "number" ? rep(a, b) : mulNums(a, b));
+    const repList = (a, b) => { const n = Math.max(0, Math.floor(b)); if (a.length * n > 1e7) fail("слишком длинный список (больше 10 миллионов элементов)"); const r = []; for (let i = 0; i < n; i++) for (const x of a) r.push(x); return r; };
+    R.mul = (a, b) => (typeof a === "string" && typeof b === "number" ? rep(a, b) : Array.isArray(a) && typeof b === "number" ? repList(a, b) : mulNums(a, b));
     R.div = arith("div", (a, b) => { if (b === 0) fail("делить на ноль нельзя"); return a / b; });
     R.mod = arith("mod", (a, b) => { if (b === 0) fail("делить на ноль нельзя"); return ((a % b) + b) % b; });
     R.pow = arith("pow", (a, b) => Math.pow(a, b));

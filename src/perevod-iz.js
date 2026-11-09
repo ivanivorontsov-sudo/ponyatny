@@ -237,6 +237,8 @@
         if (L === "javascript") return isDictLike(e.r) ? wrap(l + " in " + r, prec, p) : E(e.r, 10) + ".includes(" + E(e.l) + ")";
         return isDictLike(e.r) ? E(e.r, 10) + ".ContainsKey(" + E(e.l) + ")" : E(e.r, 10) + ".Contains(" + E(e.l) + ")";
       }
+      if (e.op === "*" && L !== "python" && e.l.k === "list") return L === "javascript" ? "Array(Math.max(0, Math.floor(" + E(e.r) + "))).fill(" + E(e.l) + ").flat()" : "Enumerable.Repeat(" + E(e.l) + ", (int)(" + E(e.r) + ")).SelectMany(x => x).ToList()";
+      if (e.op === "*" && L !== "python" && e.l.k === "str") return L === "javascript" ? E(e.l, 10) + ".repeat(" + E(e.r) + ")" : "string.Concat(Enumerable.Repeat(" + E(e.l) + ", (int)(" + E(e.r) + ")))";
       if (e.op === "^") return L === "python" ? wrap(l + " ** " + r, prec, p) : L === "javascript" ? wrap(l + " ** " + r, prec, p) : "Math.Pow(" + E(e.l) + ", " + E(e.r) + ")";
       if (e.op === "/" && L !== "python") note(e, "деление на ноль в " + (L === "javascript" ? "JavaScript" : "C#") + " не вызывает ошибку, как в «Понятном»");
       if (e.op === "%" && L !== "python") note(e, "остаток от деления отрицательных чисел в " + (L === "javascript" ? "JavaScript" : "C#") + " считается иначе, чем в «Понятном»");
