@@ -346,11 +346,15 @@
     let ast;
     try { ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "script", locations: true, allowReturnOutsideFunction: true }); }
     catch (e) { throw new TranslateError("JavaScript не разобрался: " + e.message.replace(/\s*\(\d+:\d+\)$/, ""), e.loc && e.loc.line, e.loc && e.loc.column + 1); }
+    return estreeToIR(ast);
+  }
+  function estreeToIR(ast) {
     const un = (text) => ({ t: "unsupported", text });
     const numE = (v) => ({ t: "num", v });
     function S(n) {
       const line = n.loc.start.line;
       switch (n.type) {
+        case "PonNote": return { t: "note", text: n.text, line };
         case "VariableDeclaration":
           return n.declarations.map((d) => (d.id.type === "Identifier" ? { t: "assign", targets: [{ t: "name", v: d.id.name }], op: "=", value: d.init ? E(d.init) : { t: "null" }, line, decl: n.kind } : { t: "note", text: "деструктуризация не переводится", line }));
         case "ExpressionStatement": {
@@ -437,6 +441,7 @@
     function B(n) { if (n.type === "BlockStatement") return n.body.flatMap((x) => [].concat(S(x))); return [].concat(S(n)); }
     function E(n) {
       switch (n.type) {
+        case "PonUnsupported": return un(n.text);
         case "Literal":
           if (n.regex) return un("регулярные выражения не переводятся");
           if (n.value === null) return { t: "null" };
@@ -768,14 +773,14 @@
     function inner(body) { ind++; block(body); ind--; }
     function exprStmt(e) {
       const c = E(e);
-      if (c[0] === "\u0000") return "напиши" + (c.length > 1 ? " " + c.slice(1) : "");
+      if (c[0] === "\u0000") return "пиши" + (c.length > 1 ? " " + c.slice(1) : "");
       return c;
     }
     function assignName(n, op, v, decl) {
       const sc = cur();
       if (!sc.declared.has(n) && !sc.globals.has(n) && (from === "python" || decl)) {
         sc.declared.add(n);
-        if (op === "=") { emit((decl === "const" ? "константа " : "пусть ") + nm(n) + " = " + v); return; }
+        if (op === "=") { emit((decl === "const" ? "конст " : "пусть ") + nm(n) + " = " + v); return; }
         pnote("переменная «" + n + "» изменяется до объявления");
         emit("пусть " + nm(n) + " = 0");
       }
@@ -827,7 +832,7 @@
           if (from === "python" && it.t === "call" && it.fn.t === "name" && it.fn.v === "range" && s.targets.length === 1) {
             const r = it.args;
             const v = nm(s.targets[0]);
-            if (r.length === 1 && s.targets[0] === "_") emit("повторить " + E(r[0]) + " раз");
+            if (r.length === 1 && s.targets[0] === "_") emit("повтори " + E(r[0]) + " раз");
             else if (r.length === 1) emit("для " + v + " от 0 до " + E(minus1(r[0])) + " шаг 1");
             else if (r.length === 2) emit("для " + v + " от " + E(r[0]) + " до " + E(minus1(r[1])) + " шаг 1");
             else emit("для " + v + " от " + E(r[0]) + " до " + E(rangeEnd(r[1], r[2])) + " шаг " + E(r[2]));
@@ -876,7 +881,7 @@
           return;
         }
         case "try": {
-          emit("попробуй");
+          emit("пробуй");
           inner(s.body);
           if (s.handler) {
             emit("если ошибка" + (s.errName ? " как " + nm(s.errName) : ""));
@@ -945,5 +950,11 @@
     return r;
   }
 
-  return { toPonIdent, translateToPon, pyParse, jsToIR, TranslateError };
+  function translateAstToPon(ast, from) {
+    const r = irToPon(estreeToIR(ast), from || "javascript");
+    try { Y.frontend(r.code, {}); } catch (e) { r.notes.push({ line: 0, text: "получившийся код не прошёл проверку «Понятного»: " + e.message }); r.checkError = e.message; }
+    return r;
+  }
+
+  return { toPonIdent, translateToPon, translateAstToPon, pyParse, jsToIR, estreeToIR, irToPon, TranslateError };
 });

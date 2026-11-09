@@ -155,6 +155,7 @@
     function E(e, prec) {
       prec = prec || 0;
       switch (e.k) {
+        case "raw": return e.js || "None";
         case "num": return L === "csharp" && Number.isInteger(e.v) ? e.v + ".0" : String(e.v);
         case "str": return JSON.stringify(e.v);
         case "bool": return L === "python" ? (e.v ? "True" : "False") : e.v ? "true" : "false";
@@ -473,7 +474,35 @@
           emit(t + " " + s.op + " " + v + (L === "python" ? "" : ";"));
           return;
         }
+        case "dowhile":
+          if (L === "python") { emit("while True:"); inner(s.body); ind++; emit("if not (" + E(s.cond) + "):"); ind++; emit("break"); ind -= 2; return; }
+          emit("do {"); inner(s.body); emit("} while (" + E(s.cond) + ");");
+          return;
+        case "multilet": case "multiassign": {
+          const names = s.k === "multilet" ? s.names.map(nm) : s.parts.map((pt) => (pt.target.k === "name" ? nm(pt.target.name) : E(pt.target)));
+          const v = s.value.k === "list" ? s.value.items.map((x) => E(x)).join(", ") : E(s.value);
+          if (L === "python") { emit(names.join(", ") + " = " + v); return; }
+          if (L === "javascript") { emit((s.k === "multilet" ? (s.kind === "let" ? "let " : "const ") : "") + "[" + names.join(", ") + "] = [" + v + "];"); return; }
+          emit("var __t" + (++tmp) + " = new List<dynamic> { " + v + " };");
+          names.forEach((n, i) => emit((s.k === "multilet" ? "dynamic " : "") + n + " = __t" + tmp + "[" + i + "];"));
+          return;
+        }
+        case "assert":
+          if (L === "python") emit("assert " + E(s.cond) + (s.msg ? ", " + E(s.msg) : ""));
+          else if (L === "javascript") emit("if (!(" + E(s.cond) + ")) throw new Error(" + (s.msg ? E(s.msg) : "\"проверка не прошла\"") + ");");
+          else emit("if (!(" + E(s.cond) + ")) throw new Exception(" + (s.msg ? E(s.msg) : "\"проверка не прошла\"") + ");");
+          return;
+        case "enum": {
+          let last = -1;
+          const items = s.items.map((it) => { let v; if (it.value) { v = E(it.value); if (it.value.k === "num") last = it.value.v; } else v = String(++last); return [it.name, v]; });
+          if (L === "python") emit(nm(s.name) + " = {" + items.map(([k, v]) => JSON.stringify(k) + ": " + v).join(", ") + "}");
+          else if (L === "javascript") emit("const " + nm(s.name) + " = Object.freeze({ " + items.map(([k, v]) => JSON.stringify(k) + ": " + v).join(", ") + " });");
+          else emit("dynamic " + nm(s.name) + " = new Dictionary<string, dynamic> { " + items.map(([k, v]) => "{ " + JSON.stringify(k) + ", " + v + " }").join(", ") + " };");
+          return;
+        }
+        case "iface": note(s, "интерфейс «" + s.name + "» не переведён: в " + L + " проверка «реализует» не выполняется"); return;
         case "print": {
+          if (s.err) note(s, s.err === "warn" ? "«предупреди» переведено как обычный вывод" : "«отладка» переведена как обычный вывод");
           const a = s.items.map((x) => E(x)).join(", ");
           emit(L === "python" ? "напиши(" + a + ")" : L === "javascript" ? "напиши(" + a + ");" : "Помощь.Напиши(" + a + ");");
           return;
@@ -536,7 +565,7 @@
           return;
         }
         case "func": {
-          const ps = s.params.map((q) => (L === "csharp" ? "dynamic " + q.name + (q.def ? " = " + E(q.def) : "") : nm(q.name) + (q.def ? (L === "python" ? "=" : " = ") + E(q.def) : "")));
+          const ps = s.params.map((q) => (L === "csharp" ? "dynamic " + q.name + (q.def ? " = null" : "") : nm(q.name) + (q.def ? (L === "python" ? "=" : " = ") + E(q.def) : "")));
           if (L === "python") {
             const isInit = inClass && s.name === "создать";
             const name = isInit ? "__init__" : s.name === "строкой" && inClass ? "__str__" : nm(s.name);
@@ -562,7 +591,7 @@
             else if (inClass && s.name === "строкой") emit("public override string ToString()");
             else emit((inClass ? "public virtual " : "static ") + "dynamic " + nm(s.name) + "(" + ps.join(", ") + ")");
             emit("{");
-            ind++; block(s.body); if (!isInit && !(inClass && s.name === "строкой") && !(s.body.length && s.body[s.body.length - 1].k === "return")) emit("return null;"); ind--;
+            ind++; s.params.filter((q) => q.def && !(q.def.k === "lit" && q.def.v == null)).forEach((q) => emit("if (" + q.name + " == null) " + q.name + " = " + E(q.def) + ";")); block(s.body); if (!isInit && !(inClass && s.name === "строкой") && !(s.body.length && s.body[s.body.length - 1].k === "return")) emit("return null;"); ind--;
             emit("}");
           }
           return;

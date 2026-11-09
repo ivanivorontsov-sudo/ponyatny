@@ -81,3 +81,15 @@ test("Понятный → C# собирается и даёт тот же вы�
   const out = execFileSync(dotnet, ["run", "--project", proj], { env: { ...process.env, DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" } }).toString();
   assert.strictEqual(out.replace(/\r/g, ""), runPon(src));
 });
+test("перевод новых конструкций 2.4 в Python и JavaScript", () => {
+  const IZ = require("../src/perevod-iz.js");
+  const cp = require("child_process"), os = require("os");
+  const src = "пусть а, б = 1, 2\nа, б = б, а\nделай\n    а += 1\nконец пока а < 5\nперечисление Ц\n    А, Б\nконец\nубедись а > 0\nпиши а, б, Ц[\"Б\"]\n";
+  const js = IZ.translate(src, "javascript").code;
+  const f = path.join(os.tmpdir(), "pon-iz-" + process.pid + ".js");
+  fs.writeFileSync(f, js);
+  const r = cp.spawnSync(process.execPath, [f], { encoding: "utf8" });
+  fs.unlinkSync(f);
+  assert.strictEqual(r.stdout, "5 1 1\n");
+  assert.match(IZ.translate(src, "python").code, /while True:\n\s+а \+= 1\n\s+if not \(а < 5\):\n\s+break/);
+});

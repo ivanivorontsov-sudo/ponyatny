@@ -87,6 +87,8 @@ const EXAMPLES = [
   ["privet.pon", "Привет (первая программа)"],
   ["kalkulyator.pon", "Калькулятор"],
   ["ugadai.pon", "Угадай число"],
+  ["figury.pon", "Интерфейсы и общие поля (2.4)"],
+  ["shutki.pon", "Шуточный диалект (2.4)"],
   ["klass.pon", "Классы и наследование"],
   ["slovar.pon", "Словари"],
   ["faktorial.pon", "Рекурсия: факториал"],
@@ -184,8 +186,9 @@ $("run").onclick = () => {
     "const __post = (m) => parent.postMessage(m, \"*\");\n" +
     "const __R = __makeRuntime({ write: (s) => __post({ t: \"out\", s: String(s) }), ask: (q) => { const a = prompt(q || \"Введи значение\"); __post({ t: \"out\", s: (q ? q + \" \" : \"\") + (a === null ? \"\" : a) }); return a === null ? \"\" : a; } });\n" +
     "try {\n" + js + "\n__post({ t: \"done\" });\n} catch (e) {\n" +
+    "  if (e && e.isExit) { __post({ t: \"done\" }); } else {\n" +
     "  const m = e && e.isPon ? e.message : e instanceof RangeError ? __R.explain(e) : e instanceof ReferenceError ? \"имя используется раньше, чем объявлено\" : \"внутренняя ошибка: \" + (e && e.message);\n" +
-    "  __post({ t: \"err\", s: (__R.L ? \"Строка \" + __R.L + \": \" : \"\") + m, line: __R.L });\n}\n";
+    "  __post({ t: \"err\", s: (__R.L ? \"Строка \" + __R.L + \": \" : \"\") + m, line: __R.L });\n}}\n";
   sandbox = document.createElement("iframe");
   sandbox.setAttribute("sandbox", "allow-scripts allow-modals");
   sandbox.setAttribute("referrerpolicy", "no-referrer");
