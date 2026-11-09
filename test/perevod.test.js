@@ -60,12 +60,13 @@ test("неточные места помечаются примечаниями"
   assert.ok(r1.notes.some((n) => /навсегда/.test(n.text)));
   assert.match(r1.code, /# ПРИМЕЧАНИЕ \(строка 1\)/);
   const r2 = V.translateToPon("import os\nx = {1, 2}\nprint(x)\nwith open('a') as f:\n    pass\n", "python");
-  assert.ok(r2.notes.some((n) => /множества/.test(n.text)));
+  assert.match(r2.code, /пусть x = множество\(\[1, 2\]\)/);
   assert.ok(r2.notes.some((n) => /with/.test(n.text)));
   const r3 = V.translateToPon("let a = 5; a >>= 1; console.log(a >> 1);", "javascript");
-  assert.ok(r3.notes.some((n) => /«>>=»/.test(n.text)));
-  assert.ok(r3.notes.some((n) => /«>>»/.test(n.text)));
-  assert.match(r3.code, /# ПРИМЕЧАНИЕ/);
+  assert.match(r3.code, /a = сдвиг_вправо\(a, 1\)/);
+  assert.match(r3.code, /пиши сдвиг_вправо\(a, 1\)/);
+  const r4 = V.translateToPon("x = 1\ndel x\n", "python");
+  assert.match(r4.code, /# ПРИМЕЧАНИЕ/);
 });
 test("ошибки переводчика по-русски", () => {
   assert.throws(() => IZ.translate("напиши 1", "cobol"), /не знаю язык «cobol»/);
@@ -92,4 +93,19 @@ test("перевод новых конструкций 2.4 в Python и JavaScri
   fs.unlinkSync(f);
   assert.strictEqual(r.stdout, "5 1 1\n");
   assert.match(IZ.translate(src, "python").code, /while True:\n\s+а \+= 1\n\s+if not \(а < 5\):\n\s+break/);
+});
+test("универсальные конструкции Python и JavaScript переводятся в «Понятный» 2.4 и работают так же", () => {
+  const norm = (t) => t.replace(/\bTrue\b|\btrue\b/g, "истина").replace(/\bFalse\b|\bfalse\b/g, "ложь").replace(/'/g, "\"");
+  for (const [file, from, cmd] of [["universal.py", "python", "python3"], ["universal.js", "javascript", process.execPath]]) {
+    const src = fs.readFileSync(path.join(__dirname, "perevod", file), "utf8");
+    const r = V.translateToPon(src, from);
+    assert.ok(!r.checkError, file + ": " + r.checkError + "\n" + r.code);
+    assert.ok(!/«[A-Za-z]+(Pattern|Expression)» не переводится/.test(r.code), r.code);
+    const err = [];
+    const pon = Y.run(r.code, { writeErr: (s) => err.push(s) }).join("\n") + "\n";
+    assert.deepStrictEqual(err, ["в поток ошибок"]);
+    const nat = spawnSync(cmd, [path.join(__dirname, "perevod", file)], { encoding: "utf8" });
+    if (nat.error) continue;
+    assert.strictEqual(pon, norm(nat.stdout), file);
+  }
 });
