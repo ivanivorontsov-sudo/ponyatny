@@ -108,13 +108,19 @@ function highlight(src) {
   while (i < src.length) {
     const c = src[i];
     if (c === "#" || (c === "/" && src[i + 1] === "/")) { let j = src.indexOf("\n", i); if (j < 0) j = src.length; h += "<span class=c>" + esc(src.slice(i, j)) + "</span>"; i = j; continue; }
-    if (c === '"' || c === "«") {
-      const close = c === '"' ? '"' : "»";
-      let j = i + 1;
-      while (j < src.length && src[j] !== close && src[j] !== "\n") j += src[j] === "\\" ? 2 : 1;
-      const s = src.slice(i, Math.min(j + 1, src.length));
+    const Q = { "\"": "\"", "'": "'", "`": "`", "«": "»", "‹": "›", "„": "“”", "“": "”", "‘": "’", "‚": "‘’", "”": "”", "’": "’" };
+    if (Q[c]) {
+      const close = Q[c], nest = c === "«" || c === "‹";
+      let j = i + 1, d = 0;
+      while (j < src.length && src[j] !== "\n") {
+        if (src[j] === "\\") { j += 2; continue; }
+        if (nest && src[j] === c) d++;
+        if (close.indexOf(src[j]) !== -1) { if (d === 0) { j++; break; } d--; }
+        j++;
+      }
+      const s = src.slice(i, j);
       h += "<span class=s>" + esc(s).replace(/\{([^{}]*)\}/g, "<span class=i>{$1}</span>") + "</span>";
-      i = j + 1;
+      i = j;
       continue;
     }
     const m = src.slice(i).match(/^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё]*/);
