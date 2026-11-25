@@ -591,6 +591,19 @@
           else emit("dynamic " + nm(s.name) + " = new Dictionary<string, dynamic> { " + items.map(([k, v]) => "{ " + JSON.stringify(k) + ", " + v + " }").join(", ") + " };");
           return;
         }
+        case "pass": emit(L === "python" ? "pass" : ";"); return;
+        case "avos": {
+          const h = [{ k: "print", items: [{ k: "str", v: "Штатный режим, расходимся" }], line: s.line, col: s.col }];
+          if (s.inFn) h.push({ k: "return", value: { k: "num", v: 42 }, line: s.line, col: s.col });
+          S({ k: "try", body: s.body, handler: h, errName: null, line: s.line, col: s.col });
+          return;
+        }
+        case "feature":
+          note(s, "«сделать_вид_что_так_и_задумано» переведено как перехват ошибки с обычным выводом");
+          S({ k: "try", body: s.body, handler: [{ k: "print", items: [{ k: "tmpl", parts: [{ k: "name", name: "__вид", ref: "user" }, " — Фича активирована"] }] }], errName: "__вид", line: s.line, col: s.col });
+          return;
+        case "quiet": note(s, "«чтоб_никто_не_догадался» переведён без отключения вывода"); s.body.forEach(S); return;
+        case "integral": note(s, "блок «интеграл» не переведён: посчитайте площадь функцией (например, scipy.integrate.quad)"); return;
         case "iface": note(s, "интерфейс «" + s.name + "» не переведён: в " + L + " проверка «реализует» не выполняется"); return;
         case "print": {
           if (s.err) note(s, s.err === "warn" ? "«предупреди» переведено как обычный вывод" : "«отладка» переведена как обычный вывод");
