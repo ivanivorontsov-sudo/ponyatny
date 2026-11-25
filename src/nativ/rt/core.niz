@@ -1,0 +1,412 @@
+// Среда выполнения «Понятного» на «Низе»: значения, сборщик мусора, строки, списки, словари.
+// Значение — 64-битное слово (NaN-упаковка): число double как есть; остальное — с меткой в старших 16 битах.
+const UNDEF = 0xFFF9000000000000;
+const NUL = 0xFFF9000000000001;
+const FALSEV = 0xFFF9000000000002;
+const TRUEV = 0xFFF9000000000003;
+const HEAPTAG = 0xFFFA000000000000;
+const PTRTAG = 0xFFFB000000000000;
+const LOW48 = 0x0000FFFFFFFFFFFF;
+const NANV = 0x7FF8000000000000;
+const T_UNDEF = 0; const T_NULL = 1; const T_BOOL = 2; const T_NUM = 3; const T_PTR = 4;
+const T_STR = 5; const T_LIST = 6; const T_DICT = 7; const T_SET = 8; const T_FN = 9; const T_OBJ = 10; const T_CLASS = 11; const T_BOX = 12; const T_IFACE = 13; const T_BUF = 14;
+const CELL = 96;
+const CHUNK_CELLS = 43690;
+struct Hd { hdr }
+struct Str : Hd { blen, clen, shash, sp }
+struct List : Hd { len, cap, items }
+struct Dict : Hd { live, dn, dcap, hcap, ents, idx }
+struct Fn : Hd { code, env, nenv, arity, fname, cptr, fself }
+struct Cls : Hd { cname, parent, methods, getters, setters, statics, cinit, ctors, cifaces, cnative }
+struct Obj : Hd { ocls, fields }
+struct Box : Hd { bv }
+struct Iface : Hd { iname, imethods }
+struct Buf : Hd { bsize, bdata, bowned }
+
+extern malloc(i) -> i;
+extern calloc(i, i) -> i;
+extern realloc(i, i) -> i;
+extern free(i) -> v;
+extern memcpy(i, i, i) -> i;
+extern memmove(i, i, i) -> i;
+extern memcmp(i, i, i) -> i32;
+extern memset(i, i, i) -> i;
+extern strlen(i) -> i;
+extern strcmp(i, i) -> i32;
+extern strncmp(i, i, i) -> i32;
+extern strtod(i, i) -> f;
+extern exit(i) -> v;
+@linux extern snprintf(i, i, i, ...) -> i32;
+@windows extern snprintf(i, i, i, ...) -> i32 from "c" as "_snprintf";
+
+global rt_handler;
+global rt_exc;
+global rt_L;
+global rt_mute;
+global rt_depth;
+global rt_fast;
+global rt_feature;
+global rt_color;
+global rt_tmp[16];
+
+inline fn isnum(v) { return (v >>> 48) < 0xFFF9; }
+inline fn isheap(v) { return (v >>> 48) == 0xFFFA; }
+inline fn P(v) { return v & LOW48; }
+inline fn HV(p) { return p | HEAPTAG; }
+inline fn BOOLV(b) { return FALSEV + (b != 0); }
+inline fn ISNIL(v) { return v == UNDEF || v == NUL; }
+fn vtype(v) {
+  var top = v >>> 48;
+  if (top < 0xFFF9) { return T_NUM; }
+  if (top == 0xFFFA) { return ld8(v & LOW48); }
+  if (v == UNDEF) { return T_UNDEF; }
+  if (v == NUL) { return T_NULL; }
+  if (top == 0xFFFB) { return T_PTR; }
+  return T_BOOL;
+}
+inline fn is_t(v, t) { return isheap(v) && ld8(v & LOW48) == t; }
+fn xmalloc(n) { if (n < 8) { n = 8; } var p = malloc(n); if (p == 0) { oom(); } return p; }
+fn xrealloc(p, n) { if (n < 8) { n = 8; } var q = realloc(p, n); if (q == 0) { oom(); } return q; }
+fn oom() { err_cstr("Ошибка. Не хватает памяти"); exit(1); return 0; }
+
+// ===================== Сборщик мусора =====================
+global gc_chunks[512];
+global gc_nchunks;
+global gc_free;
+global gc_since;
+global gc_threshold = 100000;
+global gc_total;
+global gc_lo = 0x7FFFFFFFFFFFFFFF;
+global gc_hi;
+global gc_bottom;
+global gc_roots[256];
+global gc_nroots;
+global gc_mstack;
+global gc_msp;
+global gc_mcap;
+global gc_off;
+
+fn gc_root(p, n) { if (gc_nroots < 128) { gc_roots[2 * gc_nroots] = p; gc_roots[2 * gc_nroots + 1] = n; gc_nroots += 1; } return 0; }
+fn gc_add_chunk() {
+  var n = CHUNK_CELLS;
+  var base = calloc(n, CELL);
+  if (base == 0 || gc_nchunks >= 512) { oom(); }
+  gc_chunks[gc_nchunks] = base; gc_nchunks += 1;
+  if (base < gc_lo) { gc_lo = base; }
+  if (base + n * CELL > gc_hi) { gc_hi = base + n * CELL; }
+  var i = n - 1;
+  while (i >= 0) { var c = base + i * CELL; st(c + 8, gc_free); gc_free = c; i -= 1; }
+  gc_total += n;
+  return 0;
+}
+fn gc_push(p) {
+  if (ld8(p + 1)) { return 0; }
+  st8(p + 1, 1);
+  if (gc_msp == gc_mcap) { if (gc_mcap == 0) { gc_mcap = 4096; } else { gc_mcap = gc_mcap * 2; } gc_mstack = xrealloc(gc_mstack, gc_mcap * 8); }
+  gc_mstack[gc_msp] = p; gc_msp += 1;
+  return 0;
+}
+fn gc_mark(v) { if ((v >>> 48) == 0xFFFA) { var p = v & LOW48; if (p) { gc_push(p); } } return 0; }
+fn gc_scan_word(w) {
+  if ((w >>> 48) == 0xFFFA) { w = w & LOW48; }
+  if (w < gc_lo || w >= gc_hi) { return 0; }
+  var i = 0;
+  while (i < gc_nchunks) {
+    var b = gc_chunks[i];
+    if (w >= b && w < b + CHUNK_CELLS * CELL) {
+      var c = b + ((w - b) / CELL) * CELL;
+      if (ld8(c)) { gc_push(c); }
+      return 0;
+    }
+    i += 1;
+  }
+  return 0;
+}
+fn gc_trace(p) {
+  var t = ld8(p);
+  var i = 0;
+  if (t == T_LIST) { var a = p->items; var n = p->len; while (i < n) { gc_mark(a[i]); i += 1; } return 0; }
+  if (t == T_DICT || t == T_SET) { var e = p->ents; var m = p->dn; while (i < m) { if (e[2 * i] != UNDEF) { gc_mark(e[2 * i]); gc_mark(e[2 * i + 1]); } i += 1; } return 0; }
+  if (t == T_FN) { var env = p->env; var k = p->nenv; while (i < k) { gc_mark(env[i]); i += 1; } gc_mark(p->fself); return 0; }
+  if (t == T_OBJ) { gc_mark(p->ocls); gc_mark(p->fields); return 0; }
+  if (t == T_CLASS) { gc_mark(p->cname); gc_mark(p->parent); gc_mark(p->methods); gc_mark(p->getters); gc_mark(p->setters); gc_mark(p->statics); gc_mark(p->cinit); gc_mark(p->ctors); gc_mark(p->cifaces); gc_mark(p->cnative); return 0; }
+  if (t == T_BOX) { gc_mark(p->bv); return 0; }
+  if (t == T_IFACE) { gc_mark(p->iname); gc_mark(p->imethods); return 0; }
+  return 0;
+}
+fn gc_finalize(p) {
+  var t = ld8(p);
+  if (t == T_STR) { free(p->sp); return 0; }
+  if (t == T_LIST) { free(p->items); return 0; }
+  if (t == T_DICT || t == T_SET) { free(p->ents); free(p->idx); return 0; }
+  if (t == T_FN) { if (p->env) { free(p->env); } return 0; }
+  if (t == T_BUF) { if (p->bowned) { free(p->bdata); } return 0; }
+  return 0;
+}
+fn gc_collect() {
+  gc_msp = 0;
+  var sp = getsp();
+  while (sp < gc_bottom) { gc_scan_word(ld(sp)); sp += 8; }
+  var r = 0;
+  while (r < gc_nroots) { var base = gc_roots[2 * r]; var n = gc_roots[2 * r + 1]; var j = 0; while (j < n) { gc_mark(base[j]); j += 1; } r += 1; }
+  gc_mark(rt_exc);
+  var k = 0; while (k < 16) { gc_mark(rt_tmp[k]); k += 1; }
+  while (gc_msp) { gc_msp -= 1; gc_trace(gc_mstack[gc_msp]); }
+  var live = 0;
+  var i = 0;
+  while (i < gc_nchunks) {
+    var b = gc_chunks[i];
+    var c = 0;
+    while (c < CHUNK_CELLS) {
+      var h = b + c * CELL;
+      if (ld8(h)) {
+        if (ld8(h + 1)) { st8(h + 1, 0); live += 1; }
+        else { gc_finalize(h); memset(h, 0, CELL); st(h + 8, gc_free); gc_free = h; }
+      }
+      c += 1;
+    }
+    i += 1;
+  }
+  gc_since = 0;
+  gc_threshold = live; if (gc_threshold < 100000) { gc_threshold = 100000; }
+  if (gc_total - live < gc_total / 4) { gc_add_chunk(); }
+  return 0;
+}
+fn gc_alloc(t) {
+  if (gc_since >= gc_threshold && gc_off == 0) { gc_collect(); }
+  if (gc_free == 0) { gc_add_chunk(); }
+  var c = gc_free;
+  gc_free = ld(c + 8);
+  memset(c, 0, CELL);
+  st8(c, t);
+  gc_since += 1;
+  return c;
+}
+
+// ===================== Исключения =====================
+fn rt_throw(v) {
+  rt_exc = v;
+  if (rt_handler == 0) { rt_uncaught(); }
+  throw_unwind();
+  return 0;
+}
+fn rt_fail(cmsg) { rt_throw(cstr(cmsg)); return 0; }
+global fbuf[128];
+fn rt_failf(fmt, a, b, c) { snprintf(fbuf, 1000, fmt, a, b, c); st8(fbuf + 1000, 0); rt_fail(fbuf); return 0; }
+fn rt_enter() { rt_depth += 1; if (rt_depth > 20000) { rt_depth -= 50; rt_fail("слишком глубокая рекурсия — функция вызывает себя слишком много раз"); } return 0; }
+
+// ===================== Строки =====================
+fn utf8_count(s, n) { var c = 0; var i = 0; while (i < n) { if ((ld8(s + i) & 0xC0) != 0x80) { c += 1; } i += 1; } return c; }
+fn str_own(s, blen) {
+  if (blen > 100000000) { free(s); rt_fail("слишком длинная строка (больше 100 миллионов символов)"); }
+  var p = gc_alloc(T_STR);
+  p->sp = s; p->blen = blen; p->clen = utf8_count(s, blen);
+  return HV(p);
+}
+fn strn(s, blen) {
+  if (blen > 100000000) { rt_fail("слишком длинная строка (больше 100 миллионов символов)"); }
+  var b = xmalloc(blen + 1); memcpy(b, s, blen); st8(b + blen, 0);
+  return str_own(b, blen);
+}
+fn cstr(s) { return strn(s, strlen(s)); }
+inline fn S(v) { return (v & LOW48)->sp; }
+fn str_hash(p) {
+  if (p->shash) { return p->shash; }
+  var h = 2166136261; var s = p->sp; var n = p->blen; var i = 0;
+  while (i < n) { h = ((h ^ ld8(s + i)) * 16777619) & 0xFFFFFFFF; i += 1; }
+  if (h == 0) { h = 1; }
+  p->shash = h; return h;
+}
+fn str_eq(a, b) { if (a == b) { return 1; } var x = a & LOW48; var y = b & LOW48; if (x->blen != y->blen) { return 0; } return memcmp(x->sp, y->sp, x->blen) == 0; }
+fn str_eqc(v, c) { return is_t(v, T_STR) && strcmp(S(v), c) == 0; }
+// построитель строк: структура в памяти [s, n, cap]
+fn sb_new() { var b = xmalloc(24); b[0] = 0; b[1] = 0; b[2] = 0; return b; }
+fn sb_add(b, s, n) {
+  if (b[1] + n + 1 > b[2]) { var c = (b[1] + n + 1) * 2; if (c < 32) { c = 32; } b[2] = c; b[0] = xrealloc(b[0], c); }
+  memcpy(b[0] + b[1], s, n); b[1] = b[1] + n; st8(b[0] + b[1], 0);
+  return 0;
+}
+fn sb_cs(b, s) { return sb_add(b, s, strlen(s)); }
+fn sb_byte(b, c) { if (b[1] + 2 > b[2]) { sb_add(b, "", 0); var cc = (b[1] + 2) * 2; if (cc < 32) { cc = 32; } b[2] = cc; b[0] = xrealloc(b[0], cc); } st8(b[0] + b[1], c); b[1] = b[1] + 1; st8(b[0] + b[1], 0); return 0; }
+fn sb_v(b, v) { var p = v & LOW48; return sb_add(b, p->sp, p->blen); }
+fn sb_done(b) {
+  var s = b[0]; var n = b[1]; free(b);
+  if (s == 0) { return strn("", 0); }
+  return str_own(s, n);
+}
+fn sb_free(b) { if (b[0]) { free(b[0]); } free(b); return 0; }
+// декодирование UTF-8: возвращает длину, код пишет в out[0]
+fn utf8_dec(s, n, i, out) {
+  var c = ld8(s + i);
+  if (c < 0x80) { out[0] = c; return 1; }
+  var len = 1;
+  if (c >= 0xF0) { len = 4; } else if (c >= 0xE0) { len = 3; } else if (c >= 0xC0) { len = 2; }
+  if (len == 1 || i + len > n) { out[0] = 0xFFFD; return 1; }
+  var r = c & 0x07; if (len == 2) { r = c & 0x1F; } if (len == 3) { r = c & 0x0F; }
+  var k = 1; while (k < len) { r = (r << 6) | (ld8(s + i + k) & 0x3F); k += 1; }
+  out[0] = r; return len;
+}
+fn utf8_enc(cp, o) {
+  if (cp < 0x80) { st8(o, cp); return 1; }
+  if (cp < 0x800) { st8(o, 0xC0 | (cp >> 6)); st8(o + 1, 0x80 | (cp & 0x3F)); return 2; }
+  if (cp < 0x10000) { st8(o, 0xE0 | (cp >> 12)); st8(o + 1, 0x80 | ((cp >> 6) & 0x3F)); st8(o + 2, 0x80 | (cp & 0x3F)); return 3; }
+  st8(o, 0xF0 | (cp >> 18)); st8(o + 1, 0x80 | ((cp >> 12) & 0x3F)); st8(o + 2, 0x80 | ((cp >> 6) & 0x3F)); st8(o + 3, 0x80 | (cp & 0x3F)); return 4;
+}
+fn str_off(p, ci) {
+  if (p->blen == p->clen) { if (ci < p->blen) { return ci; } return p->blen; }
+  var c = 0; var i = 0; var s = p->sp; var n = p->blen;
+  while (i < n) { if ((ld8(s + i) & 0xC0) != 0x80) { if (c == ci) { return i; } c += 1; } i += 1; }
+  return n;
+}
+fn str_sub(v, a, b) {
+  var p = v & LOW48;
+  if (a < 0) { a = 0; } if (b > p->clen) { b = p->clen; } if (b < a) { b = a; }
+  var oa = str_off(p, a); var ob = str_off(p, b);
+  return strn(p->sp + oa, ob - oa);
+}
+
+// ===================== Числа → текст (как в JavaScript) =====================
+global nbuf[8];
+fn js_num(x, out) {
+  if (fne(x, x)) { memcpy(out, "NaN", 4); return 0; }
+  if (feq(x, 0.0)) { memcpy(out, "0", 2); return 0; }
+  if (feq(x, 1e400)) { memcpy(out, "Infinity", 9); return 0; }
+  if (feq(x, -1e400)) { memcpy(out, "-Infinity", 10); return 0; }
+  if (feq(ftrunc(x), x) && flt(x, 1e15) && fgt(x, -1e15)) {
+    var iv = f2i(x); var o2 = out; if (iv < 0) { st8(o2, '-'); o2 += 1; iv = -iv; }
+    var tmpd[3]; var k = 0; while (iv > 0) { st8(tmpd + k, '0' + iv % 10); iv = iv / 10; k += 1; }
+    while (k > 0) { k -= 1; st8(o2, ld8(tmpd + k)); o2 += 1; } st8(o2, 0); return 0;
+  }
+  var buf[8];
+  var p = 1;
+  while (p <= 17) { snprintf(buf, 60, "%.*e", p - 1, F(x)); if (feq(strtod(buf, 0), x)) { break; } p += 1; }
+  var digits[4]; var nd = 0; var neg = 0; var q = buf;
+  if (ld8(q) == '-') { neg = 1; q += 1; }
+  while (ld8(q) && ld8(q) != 'e') { var ch = ld8(q); if (ch >= '0' && ch <= '9') { st8(digits + nd, ch); nd += 1; } q += 1; }
+  while (nd > 1 && ld8(digits + nd - 1) == '0') { nd -= 1; }
+  // показатель
+  q += 1; var esign = 1; if (ld8(q) == '-') { esign = -1; q += 1; } else if (ld8(q) == '+') { q += 1; }
+  var e = 0; while (ld8(q) >= '0' && ld8(q) <= '9') { e = e * 10 + ld8(q) - '0'; q += 1; }
+  e = e * esign;
+  var n = e + 1; var o = out; var i = 0;
+  if (neg) { st8(o, '-'); o += 1; }
+  if (nd <= n && n <= 21) { memcpy(o, digits, nd); o += nd; i = 0; while (i < n - nd) { st8(o, '0'); o += 1; i += 1; } st8(o, 0); return 0; }
+  if (0 < n && n <= 21) { memcpy(o, digits, n); o += n; st8(o, '.'); o += 1; memcpy(o, digits + n, nd - n); o += nd - n; st8(o, 0); return 0; }
+  if (-6 < n && n <= 0) { st8(o, '0'); st8(o + 1, '.'); o += 2; i = 0; while (i < -n) { st8(o, '0'); o += 1; i += 1; } memcpy(o, digits, nd); o += nd; st8(o, 0); return 0; }
+  st8(o, ld8(digits)); o += 1;
+  if (nd > 1) { st8(o, '.'); o += 1; memcpy(o, digits + 1, nd - 1); o += nd - 1; }
+  var ex = n - 1; var sg = '+'; if (ex < 0) { sg = '-'; ex = -ex; }
+  snprintf(o, 16, "e%c%d", sg, ex);
+  return 0;
+}
+fn js_round(x) {
+  if (fne(x, x) || feq(x, 1e400) || feq(x, -1e400)) { return x; }
+  var r = ffloor(x);
+  if (fge(fsub(x, r), 0.5)) { r = fadd(r, 1.0); }
+  if (feq(r, 0.0) && flt(x, 0.0)) { return -0.0; }
+  return r;
+}
+fn fmt_num(n, out) {
+  if (fne(n, n)) { memcpy(out, "не число", 16); return 0; }
+  if (feq(n, 1e400)) { memcpy(out, "бесконечность", 27); return 0; }
+  if (feq(n, -1e400)) { memcpy(out, "-бесконечность", 28); return 0; }
+  var r = fdiv(js_round(fmul(n, 1e10)), 1e10);
+  js_num(r, out);
+  var c = out; while (ld8(c)) { if (ld8(c) == '.') { st8(c, ','); break; } c += 1; }
+  return 0;
+}
+
+// ===================== Списки =====================
+fn list_new(cap) { if (cap < 4) { cap = 4; } var p = gc_alloc(T_LIST); p->items = xmalloc(cap * 8); p->cap = cap; p->len = 0; return HV(p); }
+fn list_push(lv, x) {
+  var l = lv & LOW48;
+  if (l->len == l->cap) { if (l->len > 10000000) { rt_fail("слишком длинный список (больше 10 миллионов элементов)"); } l->cap = l->cap * 2; l->items = xrealloc(l->items, l->cap * 8); }
+  var a = l->items; a[l->len] = x; l->len = l->len + 1;
+  return 0;
+}
+fn rt_list(n, items) { var l = list_new(n); var p = l & LOW48; memcpy(p->items, items, n * 8); p->len = n; return l; }
+inline fn LEN(v) { return (v & LOW48)->len; }
+inline fn ITEMS(v) { return (v & LOW48)->items; }
+
+// ===================== Словари и множества =====================
+fn dict_new(set) {
+  var t = T_DICT; if (set) { t = T_SET; }
+  var p = gc_alloc(t);
+  p->dcap = 8; p->ents = xmalloc(16 * 8); p->hcap = 16; p->idx = xmalloc(16 * 8);
+  var i = 0; while (i < 16) { p->idx[i] = -1; i += 1; }
+  return HV(p);
+}
+fn key_hash(k) {
+  if (isnum(k)) { if (feq(k, 0.0)) { return 0; } if (fne(k, k)) { return 7; } return ((k ^ (k >>> 32)) * 2654435761) & 0x7FFFFFFF; }
+  if (is_t(k, T_STR)) { return str_hash(k & LOW48); }
+  return ((k >>> 4) * 2654435761) & 0x7FFFFFFF;
+}
+fn key_eq(a, b) {
+  if (a == b) { return 1; }
+  if (isnum(a)) { return isnum(b) && (feq(a, b) || (fne(a, a) && fne(b, b))); }
+  if (is_t(a, T_STR) && is_t(b, T_STR)) { return str_eq(a, b); }
+  return 0;
+}
+fn dict_find(p, k) {
+  var h = key_hash(k); var m = p->hcap - 1; var idx = p->idx; var e = p->ents;
+  var i = h & m;
+  while (1) {
+    var j = idx[i];
+    if (j == -1) { return -1; }
+    if (j >= 0) { if (key_eq(e[2 * j], k)) { return j; } }
+    i = (i + 1) & m;
+  }
+  return -1;
+}
+fn dict_rehash(p) {
+  var e = p->ents; var w = 0; var i = 0; var n = p->dn;
+  while (i < n) { if (e[2 * i] != UNDEF) { e[2 * w] = e[2 * i]; e[2 * w + 1] = e[2 * i + 1]; w += 1; } i += 1; }
+  p->dn = w;
+  while (p->hcap < (w + 1) * 2) { p->hcap = p->hcap * 2; }
+  p->idx = xrealloc(p->idx, p->hcap * 8);
+  var idx = p->idx; var m = p->hcap - 1;
+  i = 0; while (i < p->hcap) { idx[i] = -1; i += 1; }
+  var j = 0;
+  while (j < w) { var s = key_hash(e[2 * j]) & m; while (idx[s] != -1) { s = (s + 1) & m; } idx[s] = j; j += 1; }
+  return 0;
+}
+fn dict_set(dv, k, v) {
+  var p = dv & LOW48;
+  var j = dict_find(p, k);
+  if (j >= 0) { p->ents[2 * j + 1] = v; return 0; }
+  if (p->dn == p->dcap) {
+    if (p->live < p->dn / 2) { dict_rehash(p); }
+    if (p->dn == p->dcap) { p->dcap = p->dcap * 2; p->ents = xrealloc(p->ents, p->dcap * 16); }
+  }
+  if ((p->dn + 1) * 2 > p->hcap) { p->hcap = p->hcap * 2; dict_rehash(p); }
+  var e = p->ents; e[2 * p->dn] = k; e[2 * p->dn + 1] = v;
+  var m = p->hcap - 1; var s = key_hash(k) & m; var idx = p->idx;
+  while (idx[s] >= 0) { s = (s + 1) & m; }
+  idx[s] = p->dn; p->dn = p->dn + 1; p->live = p->live + 1;
+  return 0;
+}
+// возвращает значение или UNDEF, если ключа нет
+fn dict_get(dv, k) { var p = dv & LOW48; var j = dict_find(p, k); if (j < 0) { return UNDEF; } return p->ents[2 * j + 1]; }
+fn dict_has(dv, k) { return dict_find(dv & LOW48, k) >= 0; }
+fn dict_del(dv, k) {
+  var p = dv & LOW48; var j = dict_find(p, k); if (j < 0) { return UNDEF; }
+  var e = p->ents; var old = e[2 * j + 1];
+  var m = p->hcap - 1; var s = key_hash(k) & m; var idx = p->idx;
+  while (1) { if (idx[s] == j) { idx[s] = -2; break; } s = (s + 1) & m; }
+  e[2 * j] = UNDEF; e[2 * j + 1] = UNDEF; p->live = p->live - 1;
+  return old;
+}
+fn dict_clear(dv) { var p = dv & LOW48; p->dn = 0; p->live = 0; var i = 0; while (i < p->hcap) { p->idx[i] = -1; i += 1; } return 0; }
+fn dict_live(dv) { return (dv & LOW48)->live; }
+// перебор: dict_n — число слотов, dict_k(i)/dict_v(i); пропуск UNDEF ключей
+fn dict_n(dv) { return (dv & LOW48)->dn; }
+fn dict_k(dv, i) { return (dv & LOW48)->ents[2 * i]; }
+fn dict_v(dv, i) { return (dv & LOW48)->ents[2 * i + 1]; }
+fn rt_box(v) { var p = gc_alloc(T_BOX); p->bv = v; return HV(p); }
+fn rt_fn(code, nenv, name, min, max) {
+  var p = gc_alloc(T_FN);
+  p->code = code; p->nenv = nenv; p->fname = name; p->arity = min | (max << 16); p->fself = UNDEF;
+  if (nenv) { p->env = calloc(nenv, 8); }
+  return HV(p);
+}
+inline fn ENV(f) { return (f & LOW48)->env; }

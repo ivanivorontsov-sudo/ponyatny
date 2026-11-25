@@ -1,0 +1,258 @@
+// Встроенные функции значений: строки, списки, словари, множества, числа.
+fn ARG(argc, argv, i) { if (i < argc) { return argv[i]; } return UNDEF; }
+fn need_str(v, what) { if (!is_t(v, T_STR)) { if (what == 0) { what = "значение"; } rt_failf("%s должно быть строкой, а получено: %s", what, type_name(v), 0); } return v; }
+fn need_fn(f, what) { if (!is_t(f, T_FN) && !is_t(f, T_CLASS)) { rt_failf("«%s» должно быть функцией, а получено: %s", what, type_name(f), 0); } return f; }
+fn call1(f, a) { var x[1]; x[0] = a; return rt_callv(f, 1, x); }
+fn call2(f, a, b) { var x[2]; x[0] = a; x[1] = b; return rt_callv(f, 2, x); }
+fn no_regex() { rt_fail("шаблоны (регулярные выражения) пока не поддерживаются в нативной сборке — используйте «Понятный» через JavaScript"); return 0; }
+// ---------- регистр букв ----------
+fn cp_upper(c) {
+  if (c >= 'a' && c <= 'z') { return c - 32; }
+  if (c >= 0x430 && c <= 0x44F) { return c - 32; }
+  if (c >= 0x450 && c <= 0x45F) { return c - 80; }
+  if (c >= 0xE0 && c <= 0xFE && c != 0xF7) { return c - 32; }
+  if (c >= 0x3B1 && c <= 0x3C9 && c != 0x3C2) { return c - 32; }
+  if (c == 0xFF) { return 0x178; }
+  return c;
+}
+fn cp_lower(c) {
+  if (c >= 'A' && c <= 'Z') { return c + 32; }
+  if (c >= 0x410 && c <= 0x42F) { return c + 32; }
+  if (c >= 0x400 && c <= 0x40F) { return c + 80; }
+  if (c >= 0xC0 && c <= 0xDE && c != 0xD7) { return c + 32; }
+  if (c >= 0x391 && c <= 0x3A9 && c != 0x3A2) { return c + 32; }
+  return c;
+}
+fn str_map(v, up, onlyFirst) {
+  var p = v & LOW48; var b = sb_new(); var i = 0; var tmp[1]; var o[1]; var first = 1;
+  while (i < p->blen) {
+    var n = utf8_dec(p->sp, p->blen, i, tmp); var c = tmp[0];
+    if (!onlyFirst || first) { if (up) { c = cp_upper(c); } else { c = cp_lower(c); } }
+    first = 0;
+    var k = utf8_enc(c, o); sb_add(b, o, k); i += n;
+  }
+  return sb_done(b);
+}
+fn is_ws(c) { return c == 32 || (c >= 9 && c <= 13) || c == 0xA0 || c == 0x1680 || (c >= 0x2000 && c <= 0x200A) || c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000 || c == 0xFEFF; }
+fn str_trim(v, left, right) {
+  var p = v & LOW48; var s = p->sp; var n = p->blen; var a = 0; var b = n; var tmp[1];
+  if (left) { while (a < n) { var k = utf8_dec(s, n, a, tmp); if (!is_ws(tmp[0])) { break; } a += k; } }
+  if (right) { while (b > a) { var j = b - 1; while (j > a && (ld8(s + j) & 0xC0) == 0x80) { j -= 1; } utf8_dec(s, n, j, tmp); if (!is_ws(tmp[0])) { break; } b = j; } }
+  return strn(s + a, b - a);
+}
+fn cp_index(v, byteoff) { if (byteoff < 0) { return -1; } return utf8_count(S(v), byteoff); }
+fn slice_idx(x, n, def) {
+  if (x == UNDEF) { return def; }
+  var d = ftrunc(x); if (fne(d, d)) { d = 0.0; }
+  if (flt(d, 0.0)) { d = fadd(d, i2f(n)); if (flt(d, 0.0)) { d = 0.0; } }
+  if (fgt(d, i2f(n))) { return n; }
+  return f2i(d);
+}
+fn split_str(s, sep) {
+  var r = list_new(4); var sp = sep & LOW48; var p = s & LOW48;
+  if (sp->blen == 0) { return rt_iter(s); }
+  var from = 0;
+  while (1) { var j = str_find(s, sep, from); if (j < 0) { break; } list_push(r, strn(p->sp + from, j - from)); from = j + sp->blen; }
+  list_push(r, strn(p->sp + from, p->blen - from));
+  return r;
+}
+fn m_upper(F, self, argc, argv) { return str_map(self, 1, 0); }
+fn m_lower(F, self, argc, argv) { return str_map(self, 0, 0); }
+fn m_capital(F, self, argc, argv) { return str_map(self, 1, 1); }
+fn m_trim(F, self, argc, argv) { return str_trim(self, 1, 1); }
+fn m_triml(F, self, argc, argv) { return str_trim(self, 1, 0); }
+fn m_trimr(F, self, argc, argv) { return str_trim(self, 0, 1); }
+fn m_s_contains(F, self, argc, argv) { return BOOLV(str_find(self, need_str(ARG(argc, argv, 0), "что искать"), 0) >= 0); }
+fn m_replace(F, self, argc, argv) {
+  var a = need_str(ARG(argc, argv, 0), "что заменить"); var bs = rt_show(ARG(argc, argv, 1));
+  var parts = split_str(self, a);
+  var b = sb_new(); var i = 0;
+  while (i < LEN(parts)) { if (i) { sb_v(b, bs); } sb_v(b, ITEMS(parts)[i]); i += 1; }
+  return sb_done(b);
+}
+fn m_split(F, self, argc, argv) {
+  var sep = ARG(argc, argv, 0);
+  if (ISNIL(sep)) {
+    var r = list_new(4); var p = self & LOW48; var i = 0; var tmp[1]; var start = -1;
+    while (i < p->blen) { var k = utf8_dec(p->sp, p->blen, i, tmp); if (is_ws(tmp[0])) { if (start >= 0) { list_push(r, strn(p->sp + start, i - start)); start = -1; } } else if (start < 0) { start = i; } i += k; }
+    if (start >= 0) { list_push(r, strn(p->sp + start, p->blen - start)); }
+    return r;
+  }
+  return split_str(self, need_str(sep, "разделитель"));
+}
+fn m_starts(F, self, argc, argv) { var x = need_str(ARG(argc, argv, 0), 0); var p = self & LOW48; var q = x & LOW48; return BOOLV(q->blen <= p->blen && memcmp(p->sp, q->sp, q->blen) == 0); }
+fn m_ends(F, self, argc, argv) { var x = need_str(ARG(argc, argv, 0), 0); var p = self & LOW48; var q = x & LOW48; return BOOLV(q->blen <= p->blen && memcmp(p->sp + p->blen - q->blen, q->sp, q->blen) == 0); }
+fn m_s_repeat(F, self, argc, argv) { return rt_mul(self, rt_num(ARG(argc, argv, 0), "количество")); }
+fn m_s_slice(F, self, argc, argv) {
+  var n = (self & LOW48)->clen;
+  var a = slice_idx(rt_num(ARG(argc, argv, 0), "начало"), n, 0);
+  var bv = ARG(argc, argv, 1); if (bv != UNDEF) { rt_num(bv, "конец"); }
+  var b = slice_idx(bv, n, n);
+  return str_sub(self, a, b);
+}
+fn m_s_find(F, self, argc, argv) { return i2f(cp_index(self, str_find(self, need_str(ARG(argc, argv, 0), 0), 0))); }
+fn m_s_findlast(F, self, argc, argv) {
+  var x = need_str(ARG(argc, argv, 0), 0); var last = -1; var from = 0;
+  while (1) { var j = str_find(self, x, from); if (j < 0) { break; } last = j; from = j + 1; if (from > (self & LOW48)->blen) { break; } }
+  return i2f(cp_index(self, last));
+}
+fn m_chars(F, self, argc, argv) { return rt_iter(self); }
+fn m_s_len(F, self, argc, argv) { return i2f((self & LOW48)->clen); }
+fn m_s_num(F, self, argc, argv) { return to_num(self); }
+fn m_s_rev(F, self, argc, argv) { var l = rt_iter(self); var b = sb_new(); var i = LEN(l) - 1; while (i >= 0) { sb_v(b, ITEMS(l)[i]); i -= 1; } return sb_done(b); }
+fn m_s_code(F, self, argc, argv) { var p = self & LOW48; if (p->blen == 0) { rt_fail("у пустой строки нет кода символа"); } var tmp[1]; utf8_dec(p->sp, p->blen, 0, tmp); return i2f(tmp[0]); }
+fn m_regex(F, self, argc, argv) { return no_regex(); }
+// ---------- списки ----------
+fn m_l_add(F, self, argc, argv) { mutate(self); list_push(self, ARG(argc, argv, 0)); return self; }
+fn m_l_insert(F, self, argc, argv) {
+  mutate(self);
+  var n = LEN(self); var i = slice_idx(rt_num(ARG(argc, argv, 0), "номер"), n, 0);
+  list_push(self, UNDEF);
+  var a = ITEMS(self); memmove(a + 8 * (i + 1), a + 8 * i, 8 * (n - i)); a[i] = ARG(argc, argv, 1);
+  return self;
+}
+fn m_l_remove(F, self, argc, argv) {
+  mutate(self);
+  if (LEN(self) == 0) { rt_fail("нельзя убрать элемент из пустого списка"); }
+  var iv = ARG(argc, argv, 0); if (iv == UNDEF) { iv = -1.0; }
+  var i = index_of(self, iv, LEN(self)); var a = ITEMS(self); var x = a[i];
+  memmove(a + 8 * i, a + 8 * (i + 1), 8 * (LEN(self) - i - 1)); (self & LOW48)->len = LEN(self) - 1;
+  return x;
+}
+fn m_l_len(F, self, argc, argv) { return i2f(LEN(self)); }
+fn m_l_contains(F, self, argc, argv) { return rt_has(ARG(argc, argv, 0), self); }
+fn m_l_find(F, self, argc, argv) { var x = ARG(argc, argv, 0); var i = 0; while (i < LEN(self)) { if (rt_eqb(x, ITEMS(self)[i])) { return i2f(i); } i += 1; } return -1.0; }
+fn list_join(l, sep) {
+  var b = sb_new(); var i = 0;
+  while (i < LEN(l)) { if (i && sep != UNDEF) { sb_v(b, sep); } show_to(b, ITEMS(l)[i], 0, 0); i += 1; }
+  return sb_done(b);
+}
+fn m_l_join(F, self, argc, argv) { var sep = ARG(argc, argv, 0); if (sep != UNDEF) { sep = rt_show(sep); } return list_join(self, sep); }
+global sort_fn;
+fn sort_cmp(a, b) {
+  var f = sort_fn;
+  if (f != UNDEF) { var r = rt_num(call2(f, a, b), "результат сравнения"); if (flt(r, 0.0)) { return -1; } if (fgt(r, 0.0)) { return 1; } return 0; }
+  if (isnum(a) && isnum(b)) { if (flt(a, b)) { return -1; } if (fgt(a, b)) { return 1; } return 0; }
+  return str_cmp(rt_show(a), rt_show(b));
+}
+fn list_sort(l, f) {
+  if (f != UNDEF) { need_fn(f, "сравнение"); }
+  var saved = sort_fn; sort_fn = f;
+  var n = LEN(l); var tmp = rt_list(n, ITEMS(l)); var a = ITEMS(l); var t = ITEMS(tmp);
+  var width = 1;
+  while (width < n) {
+    var i = 0;
+    while (i < n) {
+      var mid = i + width; var hi = i + 2 * width; if (mid > n) { mid = n; } if (hi > n) { hi = n; }
+      var x = i; var y = mid; var k = i;
+      while (x < mid && y < hi) { if (sort_cmp(a[y], a[x]) < 0) { t[k] = a[y]; y += 1; } else { t[k] = a[x]; x += 1; } k += 1; }
+      while (x < mid) { t[k] = a[x]; x += 1; k += 1; }
+      while (y < hi) { t[k] = a[y]; y += 1; k += 1; }
+      i += 2 * width;
+    }
+    memcpy(a, t, n * 8);
+    width = width * 2;
+  }
+  sort_fn = saved;
+  return l;
+}
+fn m_l_sort(F, self, argc, argv) { mutate(self); return list_sort(self, ARG(argc, argv, 0)); }
+fn m_l_sorted(F, self, argc, argv) { return list_sort(rt_list(LEN(self), ITEMS(self)), ARG(argc, argv, 0)); }
+fn m_l_reverse(F, self, argc, argv) { mutate(self); var a = ITEMS(self); var i = 0; var j = LEN(self) - 1; while (i < j) { var t = a[i]; a[i] = a[j]; a[j] = t; i += 1; j -= 1; } return self; }
+fn m_l_reversed(F, self, argc, argv) { var r = rt_list(LEN(self), ITEMS(self)); return m_l_reverse(0, r, 0, 0); }
+fn m_l_slice(F, self, argc, argv) {
+  var n = LEN(self);
+  var a = slice_idx(rt_num(ARG(argc, argv, 0), "начало"), n, 0);
+  var bv = ARG(argc, argv, 1); if (bv != UNDEF) { rt_num(bv, "конец"); }
+  var b = slice_idx(bv, n, n); if (b < a) { b = a; }
+  return rt_list(b - a, ITEMS(self) + 8 * a);
+}
+fn m_l_filter(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "условие"); var r = list_new(4); var i = 0; while (i < LEN(self)) { var x = ITEMS(self)[i]; if (rt_truth(call1(f, x))) { list_push(r, x); } i += 1; } return r; }
+fn m_l_map(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "преобразование"); var r = list_new(LEN(self)); var i = 0; while (i < LEN(self)) { list_push(r, call1(f, ITEMS(self)[i])); i += 1; } return r; }
+fn m_l_reduce(F, self, argc, argv) {
+  var f = need_fn(ARG(argc, argv, 0), "функция"); var i = 0; var acc = UNDEF;
+  if (argc >= 2 && argv[1] != UNDEF) { acc = argv[1]; } else { if (LEN(self) == 0) { rt_fail("нельзя свернуть пустой список без начального значения"); } acc = ITEMS(self)[0]; i = 1; }
+  while (i < LEN(self)) { acc = call2(f, acc, ITEMS(self)[i]); i += 1; }
+  return acc;
+}
+fn m_l_each(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "функция"); var i = 0; while (i < LEN(self)) { call1(f, ITEMS(self)[i]); i += 1; } return NUL; }
+fn m_l_sum(F, self, argc, argv) { var acc = 0.0; var i = 0; while (i < LEN(self)) { acc = rt_plus(acc, ITEMS(self)[i]); i += 1; } return acc; }
+fn m_l_first(F, self, argc, argv) { if (LEN(self)) { return ITEMS(self)[0]; } return NUL; }
+fn m_l_last(F, self, argc, argv) { if (LEN(self)) { return ITEMS(self)[LEN(self) - 1]; } return NUL; }
+fn m_l_copy(F, self, argc, argv) { return rt_list(LEN(self), ITEMS(self)); }
+fn m_l_empty(F, self, argc, argv) { return BOOLV(LEN(self) == 0); }
+fn m_l_clear(F, self, argc, argv) { mutate(self); (self & LOW48)->len = 0; return self; }
+fn m_l_any(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "условие"); var i = 0; while (i < LEN(self)) { if (rt_truth(call1(f, ITEMS(self)[i]))) { return TRUEV; } i += 1; } return FALSEV; }
+fn m_l_all(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "условие"); var i = 0; while (i < LEN(self)) { if (!rt_truth(call1(f, ITEMS(self)[i]))) { return FALSEV; } i += 1; } return TRUEV; }
+fn m_l_findwhere(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "условие"); var i = 0; while (i < LEN(self)) { var x = ITEMS(self)[i]; if (rt_truth(call1(f, x))) { return x; } i += 1; } return NUL; }
+fn m_l_indexwhere(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "условие"); var i = 0; while (i < LEN(self)) { if (rt_truth(call1(f, ITEMS(self)[i]))) { return i2f(i); } i += 1; } return -1.0; }
+fn m_l_unique(F, self, argc, argv) {
+  var r = list_new(4); var i = 0;
+  while (i < LEN(self)) { var x = ITEMS(self)[i]; var j = 0; var dup = 0; while (j < i) { if (rt_eqb(x, ITEMS(self)[j])) { dup = 1; break; } j += 1; } if (!dup) { list_push(r, x); } i += 1; }
+  return r;
+}
+fn m_l_toset(F, self, argc, argv) { return rt_setlit(LEN(self), ITEMS(self)); }
+// ---------- словари ----------
+fn m_d_keys(F, self, argc, argv) { return rt_iter(self); }
+fn m_d_values(F, self, argc, argv) { var r = list_new(dict_live(self)); var i = 0; while (i < dict_n(self)) { if (dict_k(self, i) != UNDEF) { list_push(r, dict_v(self, i)); } i += 1; } return r; }
+fn m_d_pairs(F, self, argc, argv) { return rt_pairs(self); }
+fn m_d_has(F, self, argc, argv) { return BOOLV(dict_has(self, ARG(argc, argv, 0))); }
+fn m_d_remove(F, self, argc, argv) { mutate(self); var v = dict_del(self, ARG(argc, argv, 0)); if (v == UNDEF) { return NUL; } return v; }
+fn m_d_get(F, self, argc, argv) { var v = dict_get(self, ARG(argc, argv, 0)); if (v != UNDEF) { return v; } v = ARG(argc, argv, 1); if (v == UNDEF) { return NUL; } return v; }
+fn m_d_len(F, self, argc, argv) { return i2f(dict_live(self)); }
+fn dict_copy(d) { var r = dict_new(is_t(d, T_SET)); var i = 0; while (i < dict_n(d)) { var k = dict_k(d, i); if (k != UNDEF) { dict_set(r, k, dict_v(d, i)); } i += 1; } return r; }
+fn m_d_copy(F, self, argc, argv) { return dict_copy(self); }
+fn m_d_empty(F, self, argc, argv) { return BOOLV(dict_live(self) == 0); }
+fn m_d_clear(F, self, argc, argv) { mutate(self); dict_clear(self); return self; }
+fn m_d_merge(F, self, argc, argv) {
+  var o = ARG(argc, argv, 0); if (!is_t(o, T_DICT)) { rt_fail("объединять словарь можно только со словарём"); }
+  var r = dict_copy(self); var i = 0; while (i < dict_n(o)) { var k = dict_k(o, i); if (k != UNDEF) { dict_set(r, k, dict_v(o, i)); } i += 1; } return r;
+}
+fn m_d_each(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "функция"); var i = 0; while (i < dict_n(self)) { var k = dict_k(self, i); if (k != UNDEF) { call2(f, k, dict_v(self, i)); } i += 1; } return NUL; }
+// ---------- множества ----------
+fn m_st_add(F, self, argc, argv) { mutate(self); dict_set(self, ARG(argc, argv, 0), TRUEV); return self; }
+fn m_st_remove(F, self, argc, argv) { mutate(self); return BOOLV(dict_del(self, ARG(argc, argv, 0)) != UNDEF); }
+fn m_st_has(F, self, argc, argv) { return BOOLV(dict_has(self, ARG(argc, argv, 0))); }
+fn m_st_list(F, self, argc, argv) { return rt_iter(self); }
+fn m_st_union(F, self, argc, argv) { var r = dict_copy(self); var l = rt_iter(ARG(argc, argv, 0)); var i = 0; while (i < LEN(l)) { dict_set(r, ITEMS(l)[i], TRUEV); i += 1; } return r; }
+fn set_of(v) { var l = rt_iter(v); return rt_setlit(LEN(l), ITEMS(l)); }
+fn m_st_inter(F, self, argc, argv) { var b = set_of(ARG(argc, argv, 0)); var r = dict_new(1); var i = 0; while (i < dict_n(self)) { var k = dict_k(self, i); if (k != UNDEF && dict_has(b, k)) { dict_set(r, k, TRUEV); } i += 1; } return r; }
+fn m_st_diff(F, self, argc, argv) { var b = set_of(ARG(argc, argv, 0)); var r = dict_new(1); var i = 0; while (i < dict_n(self)) { var k = dict_k(self, i); if (k != UNDEF && !dict_has(b, k)) { dict_set(r, k, TRUEV); } i += 1; } return r; }
+fn m_st_subset(F, self, argc, argv) { var b = set_of(ARG(argc, argv, 0)); var i = 0; while (i < dict_n(self)) { var k = dict_k(self, i); if (k != UNDEF && !dict_has(b, k)) { return FALSEV; } i += 1; } return TRUEV; }
+fn m_st_each(F, self, argc, argv) { var f = need_fn(ARG(argc, argv, 0), "функция"); var l = rt_iter(self); var i = 0; while (i < LEN(l)) { call1(f, ITEMS(l)[i]); i += 1; } return NUL; }
+// ---------- числа ----------
+fn m_n_round(F, self, argc, argv) { var a[2]; a[0] = self; a[1] = ARG(argc, argv, 0); var n = 2; if (a[1] == UNDEF) { n = 1; } return b_okrugli(0, UNDEF, n, a); }
+fn m_n_int(F, self, argc, argv) { return ftrunc(self); }
+fn m_n_str(F, self, argc, argv) { return rt_show(self); }
+fn m_n_abs(F, self, argc, argv) { return self & 0x7FFFFFFFFFFFFFFF; }
+
+fn reg(d, name, code) { var k = cstr(name); rt_tmp[6] = k; dict_set(d, k, rt_fn(code, 0, name, 0, 99)); rt_tmp[6] = UNDEF; return 0; }
+fn init_methods() {
+  var i = 0; while (i < 5) { rt_M[i] = dict_new(0); i += 1; }
+  var s = rt_M[0];
+  reg(s, "большими", m_upper); reg(s, "заглавными", m_upper); reg(s, "маленькими", m_lower); reg(s, "строчными", m_lower);
+  reg(s, "обрезать", m_trim); reg(s, "содержит", m_s_contains); reg(s, "заменить", m_replace); reg(s, "разделить", m_split);
+  reg(s, "начинается", m_starts); reg(s, "заканчивается", m_ends); reg(s, "повтори", m_s_repeat); reg(s, "срез", m_s_slice);
+  reg(s, "найди", m_s_find); reg(s, "символы", m_chars); reg(s, "длина", m_s_len); reg(s, "число", m_s_num);
+  reg(s, "с_заглавной", m_capital); reg(s, "перевёрнуто", m_s_rev); reg(s, "код", m_s_code); reg(s, "найди_последний", m_s_findlast);
+  reg(s, "обрезать_слева", m_triml); reg(s, "обрезать_справа", m_trimr); reg(s, "совпадает", m_regex); reg(s, "найди_все", m_regex); reg(s, "заменить_шаблон", m_regex);
+  var l = rt_M[1];
+  reg(l, "добавь", m_l_add); reg(l, "вставь", m_l_insert); reg(l, "убери", m_l_remove); reg(l, "длина", m_l_len);
+  reg(l, "содержит", m_l_contains); reg(l, "найди", m_l_find); reg(l, "соедини", m_l_join); reg(l, "сортируй", m_l_sort);
+  reg(l, "отсортировано", m_l_sorted); reg(l, "обрати", m_l_reverse); reg(l, "срез", m_l_slice); reg(l, "отфильтруй", m_l_filter);
+  reg(l, "преобразуй", m_l_map); reg(l, "свернуть", m_l_reduce); reg(l, "для_каждого", m_l_each); reg(l, "сумма", m_l_sum);
+  reg(l, "первый", m_l_first); reg(l, "последний", m_l_last); reg(l, "копия", m_l_copy); reg(l, "пусто", m_l_empty);
+  reg(l, "очисти", m_l_clear); reg(l, "любой", m_l_any); reg(l, "все", m_l_all); reg(l, "найди_где", m_l_findwhere);
+  reg(l, "номер_где", m_l_indexwhere); reg(l, "уникальные", m_l_unique); reg(l, "перевёрнуто", m_l_reversed); reg(l, "множество", m_l_toset);
+  var d = rt_M[2];
+  reg(d, "ключи", m_d_keys); reg(d, "значения", m_d_values); reg(d, "пары", m_d_pairs); reg(d, "есть", m_d_has);
+  reg(d, "убери", m_d_remove); reg(d, "получи", m_d_get); reg(d, "длина", m_d_len); reg(d, "копия", m_d_copy);
+  reg(d, "пусто", m_d_empty); reg(d, "очисти", m_d_clear); reg(d, "объедини", m_d_merge); reg(d, "для_каждого", m_d_each);
+  var st = rt_M[3];
+  reg(st, "добавь", m_st_add); reg(st, "убери", m_st_remove); reg(st, "содержит", m_st_has); reg(st, "есть", m_st_has);
+  reg(st, "длина", m_d_len); reg(st, "пусто", m_d_empty); reg(st, "очисти", m_d_clear); reg(st, "копия", m_d_copy); reg(st, "список", m_st_list);
+  reg(st, "объедини", m_st_union); reg(st, "пересечение", m_st_inter); reg(st, "разность", m_st_diff); reg(st, "подмножество", m_st_subset); reg(st, "для_каждого", m_st_each);
+  var nm = rt_M[4];
+  reg(nm, "округли", m_n_round); reg(nm, "целое", m_n_int); reg(nm, "строкой", m_n_str); reg(nm, "модуль", m_n_abs);
+  return 0;
+}

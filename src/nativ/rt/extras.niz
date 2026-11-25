@@ -1,0 +1,53 @@
+// Дополнительные функции среды, которые вызывает переводчик.
+global rt_ErrCls;
+fn err_init(F, self, argc, argv) { rt_set(self, rt_K[2], cstr("ошибка")); return NUL; }
+fn err_create(F, self, argc, argv) { if (argc > 0 && argv[0] != UNDEF) { rt_set(self, rt_K[2], argv[0]); } return NUL; }
+fn err_str(F, self, argc, argv) { return rt_show(rt_get(self, rt_K[2])); }
+fn rt_err_class() {
+  if (rt_ErrCls) { return rt_ErrCls; }
+  gc_root(&rt_ErrCls, 1);
+  var c = rt_class_new(rt_K[5], NUL); rt_ErrCls = c;
+  rt_class_init(c, rt_fn(err_init, 0, "__init", 0, 99));
+  rt_class_add(c, 0, rt_K[1], rt_fn(err_create, 0, "создать", 0, 1));
+  rt_class_add(c, 0, rt_K[0], rt_fn(err_str, 0, "строкой", 0, 0));
+  st8((c & LOW48) + 3, ld8((c & LOW48) + 3) | 2);
+  return c;
+}
+fn rt_args_list() {
+  var l = list_new(4); rt_tmp[7] = l; var i = 1;
+  while (i < rt_argc) { list_push(l, cstr(rt_argv[i])); i += 1; }
+  rt_tmp[7] = UNDEF; return l;
+}
+fn mref_call(F, self, argc, argv) { var e = ENV(F); return rt_call(e[0], e[1], argc, argv); }
+fn rt_methodref(o, name) {
+  if (ISNIL(o)) { rt_fail("нельзя взять «::» у «ничего»"); }
+  rt_tmp[8] = o; rt_tmp[9] = name;
+  var f = rt_fn(mref_call, 2, "метод", 0, 99); var e = ENV(f); e[0] = o; e[1] = name;
+  rt_tmp[8] = UNDEF; rt_tmp[9] = UNDEF; return f;
+}
+fn obj_has_m(o, name) { return is_t(o, T_OBJ) && is_t(cls_lookup((o & LOW48)->ocls, 0, cstr(name)), T_FN); }
+fn rt_with_enter(m) {
+  if (ISNIL(m)) { rt_fail("у «с … как» должно быть значение"); }
+  if (obj_has_m(m, "войти")) { return rt_call(m, cstr("войти"), 0, 0); }
+  if (obj_has_m(m, "открыть")) { return rt_call(m, cstr("открыть"), 0, 0); }
+  return m;
+}
+fn rt_with_exit(m) {
+  if (ISNIL(m)) { return 0; }
+  if (obj_has_m(m, "выйти")) { rt_call(m, cstr("выйти"), 0, 0); }
+  else if (obj_has_m(m, "закрыть")) { rt_call(m, cstr("закрыть"), 0, 0); }
+  else if (obj_has_m(m, "закрой")) { rt_call(m, cstr("закрой"), 0, 0); }
+  return 0;
+}
+fn rt_user_error(v) { rt_throw(v); return 0; }
+fn rt_this_ctor(self, argc, argv) {
+  if (is_t(self, T_OBJ)) {
+    var cc = (self & LOW48)->ocls;
+    while (is_t(cc, T_CLASS)) {
+      var cl = (cc & LOW48)->ctors;
+      if (is_t(cl, T_LIST) && LEN(cl) > 1) { return rt_callf(pick_ctor(cl, argc), self, argc, argv); }
+      cc = (cc & LOW48)->parent;
+    }
+  }
+  return rt_call(self, rt_K[1], argc, argv);
+}

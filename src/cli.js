@@ -82,6 +82,8 @@ function parseFlags(args) {
     else if (a === "--ios" || a === "--айос" || a === "--iphone") flags.ios = true;
     else if (a === "--id" || a === "--идентификатор") flags.id = args[++i];
     else if (a === "--название" || a === "--title") flags.title = args[++i];
+    else if (a === "--нативно" || a === "--native" || a === "--натив") flags.native = true;
+    else if (a === "--цель" || a === "--target") flags.target = args[++i];
     else rest.push(a);
   }
   return { flags, rest };
@@ -93,6 +95,8 @@ function help() {
   out("Команды:");
   out("  ponyatny запустить программа.pon        выполнить программу");
   out("  ponyatny собрать программа.pon [-o имя]  сделать программу .exe (на Windows) или исполняемый файл (на Linux)");
+  out("  ponyatny собрать программа.pon --нативно [--цель windows|linux]");
+  out("                                           настоящий машинный код x86-64 без Node.js (маленький .exe или ELF)");
   out("  ponyatny собрать программа.pon --ios     проект для iPhone и iPad (Xcode, подпись через переменные окружения)");
   out("  ponyatny компилировать программа.pon     получить программа.js (JavaScript для Node.js)");
   out("  ponyatny проверить программа.pon         только проверить ошибки");
@@ -145,8 +149,40 @@ function cmdBuildIos(file, flags) {
   out("с IOS_TEAM_ID, IOS_CERT_P12_BASE64, IOS_CERT_PASSWORD и IOS_PROFILE_BASE64 — подписанный .ipa (см. docs/iOS.md).");
 }
 
+function cmdBuildNative(file, flags) {
+  const src = readSource(file);
+  const full = path.resolve(file);
+  const target = String(flags.target || (process.platform === "win32" ? "windows" : "linux")).toLowerCase();
+  const tmap = { windows: "windows", win: "windows", виндовс: "windows", linux: "linux", линукс: "linux" };
+  if (!tmap[target]) { errOut("Ошибка. Неизвестная цель «" + target + "». Можно: --цель windows или --цель linux"); process.exit(2); }
+  let program;
+  try { program = Y.frontend(src, { file: full, resolve: resolver(full), warn: warnOut }); }
+  catch (e) {
+    if (e instanceof Y.CompileError) { errOut("Ошибка. " + e.message.replace(full, path.basename(file))); process.exit(1); }
+    throw e;
+  }
+  const N = require("./nativ/index.js");
+  let bin;
+  try { bin = N.buildNative(program, { target: tmap[target] }); }
+  catch (e) {
+    if (e instanceof N.NativeError) {
+      const where = e.line ? (e.file && e.file !== full ? "Файл «" + path.basename(e.file) + "», строка " : "Строка ") + e.line + ": " : "";
+      errOut("Ошибка нативной сборки. " + where + e.pureMessage); process.exit(1);
+    }
+    errOut("Внутренняя ошибка нативной сборки: " + e.message); process.exit(3);
+  }
+  let out2 = flags.out || file.replace(/\.pon$/i, "");
+  if (tmap[target] === "windows" && !/\.exe$/i.test(out2)) out2 += ".exe";
+  if (tmap[target] === "linux" && !flags.out && !/\.pon$/i.test(file)) out2 += ".bin";
+  safeTarget(out2, [[file, "файлом программы"], [process.execPath, "самим компилятором"]]);
+  fs.writeFileSync(out2, bin);
+  try { fs.chmodSync(out2, 0o755); } catch (e) {}
+  out("Готово: " + out2 + " (машинный код x86-64, " + (tmap[target] === "windows" ? "Windows" : "Linux") + ", " + Math.max(1, Math.round(bin.length / 1024)) + " КБ, без Node.js)");
+}
+
 function cmdBuild(file, flags) {
   if (flags.ios) return cmdBuildIos(file, flags);
+  if (flags.native) return cmdBuildNative(file, flags);
   const js = Y.standalone(compileFile(file, flags));
   let base = flags.base;
   if (!base) {

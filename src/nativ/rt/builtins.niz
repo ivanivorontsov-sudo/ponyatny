@@ -1,0 +1,402 @@
+// Встроенные функции «Понятного» (те же, что в режиме JavaScript).
+extern sin(f) -> f from "m";
+extern cos(f) -> f from "m";
+extern tan(f) -> f from "m";
+extern atan(f) -> f from "m";
+extern atan2(f, f) -> f from "m";
+extern exp(f) -> f from "m";
+extern log(f) -> f from "m";
+const PI_BITS = 3.141592653589793;
+global rt_B;      // словарь «имя → функция» для встроенных, взятых как значение
+global rt_rand;
+fn A0(argc, argv) { if (argc > 0) { return argv[0]; } return UNDEF; }
+fn A1(argc, argv) { if (argc > 1) { return argv[1]; } return UNDEF; }
+fn A2(argc, argv) { if (argc > 2) { return argv[2]; } return UNDEF; }
+fn NUMF(v, what) { return rt_num(v, what); }
+// ----- ввод и вывод -----
+fn b_sprosi(F, self, argc, argv) {
+  var q = A0(argc, argv);
+  if (q != UNDEF) { var qs = rt_show(q); if ((qs & LOW48)->blen) { out_write(S(qs), (qs & LOW48)->blen); out_write(" ", 1); } }
+  out_flush();
+  var a = read_line();
+  if (a == NUL) { err_cstr("Ввод закончился — программа завершена."); rt_exit(0); }
+  return a;
+}
+fn to_num(v) {
+  if (isnum(v)) { return v; }
+  if (v == TRUEV) { return 1.0; }
+  if (v == FALSEV) { return 0.0; }
+  if (is_t(v, T_STR)) {
+    var t = str_trim(v, 1, 1); var p = t & LOW48; var s = p->sp; var n = p->blen;
+    var buf = xmalloc(n + 1); memcpy(buf, s, n + 1);
+    var i = 0; while (i < n) { if (ld8(buf + i) == ',') { st8(buf + i, '.'); break; } i += 1; }
+    var r = parse_js_number(buf, n);
+    free(buf);
+    if (r == UNDEF) { rt_failf("не получается превратить «%s» в число", S(v), 0, 0); }
+    return r;
+  }
+  rt_failf("не получается превратить «%s» в число", type_name(v), 0, 0); return 0;
+}
+fn digit_val(c) { if (c >= '0' && c <= '9') { return c - '0'; } if (c >= 'a' && c <= 'z') { return c - 'a' + 10; } if (c >= 'A' && c <= 'Z') { return c - 'A' + 10; } return 99; }
+// как Number(текст) в JavaScript; UNDEF — не число
+fn parse_js_number(s, n) {
+  if (n == 0) { return UNDEF; }
+  var i = 0; var neg = 0;
+  if (n > 2 && ld8(s) == '0') {
+    var c1 = ld8(s + 1); var base = 0;
+    if (c1 == 'x' || c1 == 'X') { base = 16; } if (c1 == 'o' || c1 == 'O') { base = 8; } if (c1 == 'b' || c1 == 'B') { base = 2; }
+    if (base) {
+      var acc = 0.0; i = 2;
+      while (i < n) { var dv = digit_val(ld8(s + i)); if (dv >= base) { return UNDEF; } acc = fadd(fmul(acc, i2f(base)), i2f(dv)); i += 1; }
+      return acc;
+    }
+  }
+  if (ld8(s) == '+' || ld8(s) == '-') { i = 1; }
+  if (strcmp(s + i, "Infinity") == 0) { if (ld8(s) == '-') { return -1e400; } return 1e400; }
+  var digits = 0; var j = i;
+  while (j < n && ld8(s + j) >= '0' && ld8(s + j) <= '9') { j += 1; digits += 1; }
+  if (j < n && ld8(s + j) == '.') { j += 1; while (j < n && ld8(s + j) >= '0' && ld8(s + j) <= '9') { j += 1; digits += 1; } }
+  if (digits == 0) { return UNDEF; }
+  if (j < n && (ld8(s + j) == 'e' || ld8(s + j) == 'E')) {
+    j += 1; if (j < n && (ld8(s + j) == '+' || ld8(s + j) == '-')) { j += 1; }
+    var ed = 0; while (j < n && ld8(s + j) >= '0' && ld8(s + j) <= '9') { j += 1; ed += 1; }
+    if (ed == 0) { return UNDEF; }
+  }
+  if (j != n) { return UNDEF; }
+  return strtod(s, 0);
+}
+fn b_chislo(F, self, argc, argv) { return to_num(A0(argc, argv)); }
+fn b_stroka(F, self, argc, argv) { return rt_show(A0(argc, argv)); }
+fn b_logicheskoe(F, self, argc, argv) { return BOOLV(rt_truth(A0(argc, argv))); }
+fn b_dlina(F, self, argc, argv) {
+  var v = A0(argc, argv);
+  if (is_t(v, T_STR)) { return i2f((v & LOW48)->clen); }
+  if (is_t(v, T_LIST)) { return i2f(LEN(v)); }
+  if (is_t(v, T_DICT) || is_t(v, T_SET)) { return i2f(dict_live(v)); }
+  rt_failf("длину можно узнать у строки, списка или словаря, а не у «%s»", type_name(v), 0, 0); return 0;
+}
+fn b_dobav(F, self, argc, argv) { var l = A0(argc, argv); if (!is_t(l, T_LIST)) { rt_fail("добавлять можно только в список"); } return m_l_add(0, l, argc - 1, argv + 8); }
+fn b_uberi(F, self, argc, argv) {
+  var l = A0(argc, argv);
+  if (is_t(l, T_LIST)) { return m_l_remove(0, l, argc - 1, argv + 8); }
+  if (is_t(l, T_DICT)) { return m_d_remove(0, l, argc - 1, argv + 8); }
+  rt_fail("убирать можно только из списка или словаря"); return 0;
+}
+fn rand01() {
+  if (rt_rand == 0) { rt_rand = time(0) * 6364136223846793005 + 1442695040888963407; if (rt_rand == 0) { rt_rand = 1; } }
+  var x = rt_rand; x = x ^ (x << 13); x = x ^ (x >>> 7); x = x ^ (x << 17); rt_rand = x;
+  return fdiv(i2f(x >>> 11), 9007199254740992.0);
+}
+fn b_sluchajnoe(F, self, argc, argv) {
+  var a = A0(argc, argv); var b = A1(argc, argv);
+  if (a == UNDEF) { return rand01(); }
+  if (b == UNDEF) { b = a; a = 1.0; }
+  rt_num(a, "начало"); rt_num(b, "конец");
+  return fadd(ffloor(fmul(rand01(), fadd(fsub(b, a), 1.0))), a);
+}
+fn b_okrugli(F, self, argc, argv) {
+  var v = rt_num(A0(argc, argv), "значение"); var k = A1(argc, argv);
+  var kk = 0.0; if (k != UNDEF && rt_truth(k)) { kk = k; }
+  var m = js_pow(10.0, kk);
+  return fdiv(js_round(fmul(v, m)), m);
+}
+fn b_koren(F, self, argc, argv) { var v = rt_num(A0(argc, argv), "значение"); if (flt(v, 0.0)) { rt_fail("корень из отрицательного числа не извлекается"); } return fsqrt(v); }
+fn b_modul(F, self, argc, argv) { return rt_num(A0(argc, argv), "значение") & 0x7FFFFFFFFFFFFFFF; }
+fn b_bolshimi(F, self, argc, argv) { return str_map(need_str(A0(argc, argv), "значение"), 1, 0); }
+fn b_malenkimi(F, self, argc, argv) { return str_map(need_str(A0(argc, argv), "значение"), 0, 0); }
+fn b_soedini(F, self, argc, argv) { var l = A0(argc, argv); if (!is_t(l, T_LIST)) { rt_fail("соединять можно только список"); } return m_l_join(0, l, argc - 1, argv + 8); }
+fn b_ot(F, self, argc, argv) {
+  var a = rt_num(A0(argc, argv), "начало"); var b = rt_num(A1(argc, argv), "конец"); var st = A2(argc, argv);
+  if (st == UNDEF) { st = 1.0; } else { st = rt_step(st); }
+  var r = list_new(16); var i = a;
+  while ((fgt(st, 0.0) && fle(i, b)) || (flt(st, 0.0) && fge(i, b))) { list_push(r, i); if (LEN(r) > 10000000) { rt_fail("слишком длинный список"); } i = fadd(i, st); }
+  return r;
+}
+fn b_tip(F, self, argc, argv) { return cstr(type_name(A0(argc, argv))); }
+fn b_summa(F, self, argc, argv) { var l = A0(argc, argv); if (!is_t(l, T_LIST)) { rt_fail("сумму можно посчитать только у списка"); } return m_l_sum(0, l, 0, 0); }
+fn pick_list(argc, argv) { if (argc == 1 && is_t(argv[0], T_LIST)) { return argv[0]; } return rt_list(argc, argv); }
+fn b_maks(F, self, argc, argv) { var l = pick_list(argc, argv); if (LEN(l) == 0) { rt_fail("у пустого списка нет максимума"); } var r = ITEMS(l)[0]; var i = 1; while (i < LEN(l)) { var y = ITEMS(l)[i]; if (rt_gt(y, r) == TRUEV) { r = y; } i += 1; } return r; }
+fn b_min(F, self, argc, argv) { var l = pick_list(argc, argv); if (LEN(l) == 0) { rt_fail("у пустого списка нет минимума"); } var r = ITEMS(l)[0]; var i = 1; while (i < LEN(l)) { var y = ITEMS(l)[i]; if (rt_lt(y, r) == TRUEV) { r = y; } i += 1; } return r; }
+fn b_celoe(F, self, argc, argv) { return ftrunc(rt_num(A0(argc, argv), "значение")); }
+fn b_stepen(F, self, argc, argv) { return rt_pow(A0(argc, argv), A1(argc, argv)); }
+fn b_vremya(F, self, argc, argv) { return os_time(); }
+fn b_data_sejchas(F, self, argc, argv) {
+  var t[1]; t[0] = time(0); var tm = localtime(t);
+  var d = dict_new(0);
+  dict_set(d, cstr("год"), i2f(lds32(tm + 20) + 1900)); dict_set(d, cstr("месяц"), i2f(lds32(tm + 16) + 1)); dict_set(d, cstr("день"), i2f(lds32(tm + 12)));
+  dict_set(d, cstr("час"), i2f(lds32(tm + 8))); dict_set(d, cstr("минута"), i2f(lds32(tm + 4))); dict_set(d, cstr("секунда"), i2f(lds32(tm)));
+  var wd = lds32(tm + 24); if (wd == 0) { wd = 7; }
+  dict_set(d, cstr("день_недели"), i2f(wd));
+  return d;
+}
+fn b_pauza(F, self, argc, argv) { var ms = rt_num(A0(argc, argv), "пауза в миллисекундах"); if (flt(ms, 0.0) || fgt(ms, 60000.0)) { rt_fail("пауза должна быть от 0 до 60000 миллисекунд"); } if (rt_fast) { return NUL; } os_sleep_ms(f2i(ms)); return NUL; }
+// toFixed из JavaScript: половина округляется вверх (от нуля по модулю)
+fn to_fixed(x, f, out) {
+  var buf[16]; var neg = flt(x, 0.0); var ax = x & 0x7FFFFFFFFFFFFFFF;
+  if (fge(ax, 1e21)) { js_num(x, out); return 0; }
+  snprintf(buf, 120, "%.40f", F(ax));
+  var dot = 0; while (ld8(buf + dot) != '.') { dot += 1; }
+  var dg[16]; var nd = 0; var i = 0;
+  while (i < dot) { st8(dg + nd, ld8(buf + i)); nd += 1; i += 1; }
+  var intd = nd; i = 0;
+  while (i < f) { st8(dg + nd, ld8(buf + dot + 1 + i)); nd += 1; i += 1; }
+  if (ld8(buf + dot + 1 + f) >= '5') {
+    var k = nd - 1; var carry = 1;
+    while (k >= 0 && carry) { var c = ld8(dg + k) + 1; if (c > '9') { st8(dg + k, '0'); } else { st8(dg + k, c); carry = 0; } k -= 1; }
+    if (carry) { memmove(dg + 1, dg, nd); st8(dg, '1'); nd += 1; intd += 1; }
+  }
+  var o = out; var allzero = 1; i = 0; while (i < nd) { if (ld8(dg + i) != '0') { allzero = 0; } i += 1; }
+  if (neg && !allzero) { st8(o, '-'); o += 1; }
+  memcpy(o, dg, intd); o += intd;
+  if (f > 0) { st8(o, '.'); o += 1; memcpy(o, dg + intd, f); o += f; }
+  st8(o, 0);
+  return 0;
+}
+fn b_format_chisla(F, self, argc, argv) {
+  var v = rt_num(A0(argc, argv), "число"); var kv = A1(argc, argv); var n = 2;
+  if (kv != UNDEF) { var kf = rt_num(kv, "знаков после запятой"); if (flt(kf, 0.0) || fgt(kf, 10.0)) { rt_fail("знаков после запятой — от 0 до 10"); } n = f2i(kf); }
+  var s[8]; to_fixed(v & 0x7FFFFFFFFFFFFFFF, n, s);
+  var b = sb_new();
+  var nz = 0; var i = 0; while (ld8(s + i)) { var ch = ld8(s + i); if (ch >= '1' && ch <= '9') { nz = 1; } i += 1; }
+  if (flt(v, 0.0) && nz) { sb_cs(b, "-"); }
+  var dot = 0; while (ld8(s + dot) && ld8(s + dot) != '.') { dot += 1; }
+  i = 0;
+  while (i < dot) { if (i > 0 && (dot - i) % 3 == 0) { sb_cs(b, " "); } sb_add(b, s + i, 1); i += 1; }
+  if (ld8(s + dot) == '.') { sb_cs(b, ","); sb_cs(b, s + dot + 1); }
+  return sb_done(b);
+}
+fn b_sinus(F, self, argc, argv) { return sin(rt_num(A0(argc, argv), "угол в радианах")); }
+fn b_kosinus(F, self, argc, argv) { return cos(rt_num(A0(argc, argv), "угол в радианах")); }
+fn b_tangens(F, self, argc, argv) { return tan(rt_num(A0(argc, argv), "угол в радианах")); }
+fn b_arktangens(F, self, argc, argv) { var y = A0(argc, argv); var x = A1(argc, argv); if (x == UNDEF) { return atan(rt_num(y, "число")); } return atan2(rt_num(y, "y"), rt_num(x, "x")); }
+fn b_eksponenta(F, self, argc, argv) { return exp(rt_num(A0(argc, argv), "степень")); }
+fn b_logarifm(F, self, argc, argv) {
+  var v = rt_num(A0(argc, argv), "число"); if (fle(v, 0.0)) { rt_fail("логарифм есть только у положительного числа"); }
+  var b = A1(argc, argv); if (b == UNDEF) { return log(v); }
+  return fdiv(log(v), log(rt_num(b, "основание")));
+}
+fn b_vniz(F, self, argc, argv) { return ffloor(rt_num(A0(argc, argv), "число")); }
+fn b_vverh(F, self, argc, argv) { return fceil(rt_num(A0(argc, argv), "число")); }
+fn file_fail(what, p) { rt_failf("не удалось %s файл «%s»", what, S(p), 0); return 0; }
+fn b_prochitaj_fajl(F, self, argc, argv) { var p = need_str(A0(argc, argv), "путь к файлу"); var r = read_file(S(p)); if (r == UNDEF) { file_fail("прочитать", p); } return r; }
+fn b_zapishi_fajl(F, self, argc, argv) { var p = need_str(A0(argc, argv), "путь к файлу"); if (!write_file(S(p), rt_show(A1(argc, argv)), 0)) { file_fail("записать", p); } return NUL; }
+fn b_dopishi_fajl(F, self, argc, argv) { var p = need_str(A0(argc, argv), "путь к файлу"); if (!write_file(S(p), rt_show(A1(argc, argv)), 1)) { file_fail("дописать", p); } return NUL; }
+fn b_fajl_est(F, self, argc, argv) { var p = need_str(A0(argc, argv), "путь к файлу"); return BOOLV(file_exists(S(p))); }
+fn b_spisok_fajlov(F, self, argc, argv) { var p = need_str(A0(argc, argv), "путь к файлу"); var l = list_dir(S(p)); if (l == NUL) { file_fail("прочитать папку", p); } return list_sort(l, UNDEF); }
+fn b_udali_fajl(F, self, argc, argv) { var p = need_str(A0(argc, argv), "путь к файлу"); if (!os_unlink(S(p))) { file_fail("удалить", p); } return NUL; }
+fn b_sozdaj_papku(F, self, argc, argv) { var p = need_str(A0(argc, argv), "путь к файлу"); if (!os_mkdirs(S(p))) { file_fail("создать папку", p); } return NUL; }
+fn b_vyhod(F, self, argc, argv) { var c = A0(argc, argv); var code = 0; if (!ISNIL(c)) { code = f2i(rt_num(c, "код выхода")); } rt_exit(code); return NUL; }
+fn b_prover(F, self, argc, argv) {
+  if (!rt_truth(A0(argc, argv))) {
+    var m = A1(argc, argv);
+    if (m == UNDEF) { var nb[16]; if (rt_L) { snprintf(nb, 100, "проверка не прошла (строка %d)", rt_L); } else { snprintf(nb, 100, "проверка не прошла"); } m = cstr(nb); }
+    rt_throw(m);
+  }
+  return NUL;
+}
+fn b_mnozhestvo(F, self, argc, argv) { var l = A0(argc, argv); if (l == UNDEF) { return dict_new(1); } return set_of(l); }
+fn b_nacelo(F, self, argc, argv) { var a = rt_num(A0(argc, argv), "делимое"); var b = rt_num(A1(argc, argv), "делитель"); if (feq(b, 0.0)) { rt_fail("делить на ноль нельзя"); } return ffloor(fdiv(a, b)); }
+fn b_ekzemplyar(F, self, argc, argv) {
+  var v = A0(argc, argv); var c = A1(argc, argv);
+  if (is_t(c, T_STR)) { return BOOLV(rt_isa(v, S(c), UNDEF)); }
+  if (is_t(c, T_IFACE)) { return BOOLV(iface_ok(v, c)); }
+  if (is_t(c, T_CLASS)) { return BOOLV(instance_of(v, c)); }
+  if (is_t(c, T_FN)) { return FALSEV; }
+  rt_fail("второе значение в «экземпляр» — класс, интерфейс или название типа"); return 0;
+}
+fn b_simvol(F, self, argc, argv) {
+  var n = rt_num(A0(argc, argv), "код символа");
+  if (!is_int(n) || flt(n, 0.0) || fgt(n, 1114111.0)) { rt_failf("нет символа с кодом %s", cshow(n), 0, 0); }
+  var o[1]; var k = utf8_enc(f2i(n), o); return strn(o, k);
+}
+fn b_kod(F, self, argc, argv) { return m_s_code(0, need_str(A0(argc, argv), "символ"), 0, 0); }
+fn bit_int(v) { rt_num(v, "число"); if (!is_int(v)) { rt_failf("побитовые операции работают только с целыми числами, а получено: %s", cshow(v), 0, 0); } return to_int32(v); }
+fn to_int32(v) { var d = fmod(ftrunc(v), 4294967296.0); var x = f2i(d); x = x & 0xFFFFFFFF; if (x >= 0x80000000) { x = x - 0x100000000; } return x; }
+fn b_bit_i(F, self, argc, argv) { return i2f(bit_int(A0(argc, argv)) & bit_int(A1(argc, argv))); }
+fn b_bit_ili(F, self, argc, argv) { return i2f(bit_int(A0(argc, argv)) | bit_int(A1(argc, argv))); }
+fn b_bit_iskl(F, self, argc, argv) { return i2f(bit_int(A0(argc, argv)) ^ bit_int(A1(argc, argv))); }
+fn b_bit_ne(F, self, argc, argv) { return i2f(~bit_int(A0(argc, argv))); }
+fn i32w(x) { x = x & 0xFFFFFFFF; if (x >= 0x80000000) { x = x - 0x100000000; } return x; }
+fn b_sdvig_vlevo(F, self, argc, argv) { var a = bit_int(A0(argc, argv)); var b = bit_int(A1(argc, argv)) & 31; return i2f(i32w(a << b)); }
+fn b_sdvig_vpravo(F, self, argc, argv) { var a = bit_int(A0(argc, argv)); var b = bit_int(A1(argc, argv)) & 31; return i2f(a >> b); }
+fn b_sdvig_vpravo_bez_znaka(F, self, argc, argv) { var a = bit_int(A0(argc, argv)) & 0xFFFFFFFF; var b = bit_int(A1(argc, argv)) & 31; return i2f(a >>> b); }
+fn b_numeruj(F, self, argc, argv) { var l = rt_iter(A0(argc, argv)); var r = list_new(LEN(l)); var i = 0; while (i < LEN(l)) { list_push(r, pair(i2f(i), ITEMS(l)[i])); i += 1; } st8((r & LOW48) + 3, 1); return r; }
+fn b_poparno(F, self, argc, argv) {
+  var x = rt_iter(A0(argc, argv)); rt_tmp[7] = x; var y = rt_iter(A1(argc, argv)); rt_tmp[8] = y;
+  var n = LEN(x); if (LEN(y) < n) { n = LEN(y); }
+  var r = list_new(n); var i = 0; while (i < n) { list_push(r, pair(ITEMS(x)[i], ITEMS(y)[i])); i += 1; }
+  st8((r & LOW48) + 3, 1); rt_tmp[7] = UNDEF; rt_tmp[8] = UNDEF; return r;
+}
+fn b_razmer(F, self, argc, argv) {
+  var v = A0(argc, argv);
+  if (ISNIL(v)) { return 0.0; } if (v == TRUEV || v == FALSEV) { return 1.0; } if (isnum(v)) { return 8.0; }
+  if (is_t(v, T_STR)) { return i2f((v & LOW48)->clen * 2); }
+  if (is_t(v, T_LIST)) { return i2f(LEN(v)); }
+  if (is_t(v, T_DICT) || is_t(v, T_SET)) { return i2f(dict_live(v)); }
+  if (is_t(v, T_OBJ)) { var l = list_new(8); keys_into(l, (v & LOW48)->fields); var c = (v & LOW48)->ocls; while (is_t(c, T_CLASS)) { keys_into(l, (c & LOW48)->methods); keys_into(l, (c & LOW48)->getters); c = (c & LOW48)->parent; } var u = m_l_unique(0, l, 0, 0); return i2f(LEN(u)); }
+  return 0.0;
+}
+fn pad_to(b, s, width, left) {
+  var p = s & LOW48; var k = width - p->clen;
+  if (left) { sb_v(b, s); } while (k > 0) { sb_cs(b, " "); k -= 1; } if (!left) { sb_v(b, s); }
+  return 0;
+}
+fn b_format(F, self, argc, argv) {
+  var fmt = A0(argc, argv);
+  if (!is_t(fmt, T_STR)) { rt_failf("шаблон для «формат» должен быть строкой, а получено: %s", type_name(fmt), 0, 0); }
+  var s = S(fmt); var n = (fmt & LOW48)->blen; var b = sb_new(); var i = 0; var ai = 1;
+  while (i < n) {
+    var c = ld8(s + i);
+    if (c != '%') { sb_add(b, s + i, 1); i += 1; continue; }
+    var j = i + 1; var left = 0; var width = 0; var prec = -1;
+    if (j < n && ld8(s + j) == '-') { left = 1; j += 1; }
+    while (j < n && ld8(s + j) >= '0' && ld8(s + j) <= '9') { width = width * 10 + ld8(s + j) - '0'; j += 1; }
+    if (j < n && ld8(s + j) == '.' && j + 1 < n && ld8(s + j + 1) >= '0' && ld8(s + j + 1) <= '9') { j += 1; prec = 0; while (j < n && ld8(s + j) >= '0' && ld8(s + j) <= '9') { prec = prec * 10 + ld8(s + j) - '0'; j += 1; } }
+    var spec = 0; if (j < n) { spec = ld8(s + j); }
+    if (spec == 0 || strchr_in("%sdifFgGxXoc", spec) == 0) { sb_add(b, s + i, 1); i += 1; continue; }
+    i = j + 1;
+    if (spec == '%') { sb_cs(b, "%"); continue; }
+    if (ai >= argc) { rt_fail("в шаблоне «формат» не хватает значений"); }
+    var a = argv[ai]; ai += 1;
+    var str = UNDEF; var nb[16];
+    if (spec == 's') { str = rt_show(a); }
+    else if (spec == 'c') { if (isnum(a)) { var o[1]; var k = utf8_enc(f2i(a), o); str = strn(o, k); } else { str = str_sub(rt_show(a), 0, 1); } }
+    else if (spec == 'd' || spec == 'i') { str = rt_show_js(ftrunc(rt_num(a, "число"))); }
+    else if (spec == 'x' || spec == 'X' || spec == 'o') {
+      var u = to_int32(rt_num(a, "число")) & 0xFFFFFFFF;
+      if (spec == 'x') { snprintf(nb, 100, "%llx", u); } else if (spec == 'X') { snprintf(nb, 100, "%llX", u); } else { snprintf(nb, 100, "%llo", u); }
+      str = cstr(nb);
+    } else {
+      var x = rt_num(a, "число");
+      if (prec < 0 && (spec == 'f' || spec == 'F')) { prec = 6; }
+      if (prec < 0) { str = rt_show_js(x); } else { var fb[48]; if (fne(x, x) || feq(x, 1e400) || feq(x, -1e400)) { js_num(x, fb); } else { to_fixed(x, prec, fb); } str = cstr(fb); }
+      if (spec == 'F' || spec == 'G') { str = str_map(str, 1, 0); }
+    }
+    if (width) { pad_to(b, str, width, left); } else { sb_v(b, str); }
+  }
+  if (ai < argc) { rt_failf("в «формат» передано слишком много значений: использовано %d, а передано %d", ai - 1, argc - 1, 0); }
+  return sb_done(b);
+}
+fn strchr_in(s, c) { var i = 0; while (ld8(s + i)) { if (ld8(s + i) == c) { return 1; } i += 1; } return 0; }
+fn rt_show_js(x) { var nb[8]; js_num(x, nb); return cstr(nb); }
+// ----- файл как объект -----
+global rt_FileCls;
+fn file_path(self) { return dict_get((self & LOW48)->fields, cstr("путь")); }
+fn f_read(F, self, argc, argv) { var p = file_path(self); var r = read_file(S(p)); if (r == UNDEF) { file_fail("прочитать", p); } return r; }
+fn f_write(F, self, argc, argv) { var p = file_path(self); if (!write_file(S(p), rt_show(A0(argc, argv)), 0)) { file_fail("записать", p); } return NUL; }
+fn f_append(F, self, argc, argv) { var p = file_path(self); if (!write_file(S(p), rt_show(A0(argc, argv)), 1)) { file_fail("дописать", p); } return NUL; }
+fn f_close(F, self, argc, argv) { return NUL; }
+fn f_enter(F, self, argc, argv) { return self; }
+fn b_otkroj(F, self, argc, argv) {
+  var p = need_str(A0(argc, argv), "путь к файлу"); var m = A1(argc, argv); var md = 0;
+  if (ISNIL(m)) { md = cstr("читать"); } else { md = rt_show(m); }
+  var c = S(md);
+  if (strcmp(c, "читать") != 0 && strcmp(c, "r") != 0 && strcmp(c, "писать") != 0 && strcmp(c, "w") != 0 && strcmp(c, "дописать") != 0 && strcmp(c, "a") != 0) { rt_failf("режим файла «%s»: напишите «читать», «писать» или «дописать»", c, 0, 0); }
+  var o = rt_obj_new(rt_FileCls);
+  dict_set((o & LOW48)->fields, cstr("путь"), p); dict_set((o & LOW48)->fields, cstr("режим"), md);
+  return o;
+}
+// ----- шутки и прочее -----
+fn plantain_ok(v) { return ISNIL(v) || (isnum(v) && (fne(v, v) || feq(v, 1e400) || feq(v, -1e400))); }
+fn b_prilozhit_podorozhnik(F, self, argc, argv) { var v = A0(argc, argv); if (plantain_ok(v)) { return cstr("Да вроде работает"); } return v; }
+fn rt_avos_msg() { rt_say("Штатный режим, расходимся"); return 0; }
+fn rt_feature_show(e) {
+  var b = sb_new();
+  if (rt_color) { sb_cs(b, "\e[32m"); } else { sb_cs(b, "✔ "); }
+  if (rt_L) { var nb[4]; snprintf(nb, 30, "Строка %d: ", rt_L); sb_cs(b, nb); }
+  sb_v(b, rt_errtext(e)); sb_cs(b, " — Фича активирована");
+  if (rt_color) { sb_cs(b, "\e[0m"); }
+  out_write(b[0], b[1]); out_write("\n", 1); sb_free(b);
+  return 0;
+}
+fn b_sdelat_vid(F, self, argc, argv) {
+  var f = A0(argc, argv);
+  if (f == UNDEF) { rt_feature = 1; return NUL; }
+  if (!is_t(f, T_FN)) { rt_fail("в «сделать_вид_что_так_и_задумано» можно передать функцию или ничего"); }
+  var d = rt_depth; var r = NUL;
+  try { r = rt_callv(f, 0, 0); } catch { rt_depth = d; rt_feature_show(rt_exc); r = NUL; }
+  return r;
+}
+fn rt_integral(f, a, b, n, h) {
+  if (!is_t(f, T_FN)) { rt_fail("интегрировать можно только функцию"); }
+  rt_num(a, "начало отрезка"); rt_num(b, "конец отрезка");
+  var N = 1000;
+  if (!ISNIL(n)) { N = f2i(js_round(rt_num(n, "число шагов"))); }
+  else if (!ISNIL(h)) { rt_num(h, "шаг"); if (fle(h, 0.0)) { rt_fail("шаг интеграла должен быть больше нуля"); } N = f2i(js_round(fdiv(fsub(b, a) & 0x7FFFFFFFFFFFFFFF, h))); }
+  if (N < 2) { N = 2; }
+  if (N % 2) { N += 1; }
+  if (N > 10000000) { rt_fail("слишком много шагов в интеграле (больше 10 000 000)"); }
+  var dx = fdiv(fsub(b, a), i2f(N)); var sum = 0.0; var i = 0;
+  while (i <= N) {
+    var y = call1(f, fadd(a, fmul(i2f(i), dx)));
+    if (!isnum(y)) { rt_failf("под интегралом должно получаться число, а получено: %s", cshow(y), 0, 0); }
+    if (i == 0 || i == N) { sum = fadd(sum, y); } else if (i % 2) { sum = fadd(sum, fmul(4.0, y)); } else { sum = fadd(sum, fmul(2.0, y)); }
+    i += 1;
+  }
+  var r = fdiv(fmul(sum, dx), 3.0);
+  if (fne(r, r) || feq(r, 1e400) || feq(r, -1e400)) { return r; }
+  var buf[8]; snprintf(buf, 60, "%.11e", F(r)); return strtod(buf, 0);
+}
+fn b_integral(F, self, argc, argv) { return rt_integral(A0(argc, argv), A1(argc, argv), A2(argc, argv), ARG(argc, argv, 3), NUL); }
+fn b_koroche(F, self, argc, argv) {
+  var s = rt_show(A0(argc, argv)); var nv = A1(argc, argv); var k = 40;
+  if (nv != UNDEF) { k = f2i(ffloor(rt_num(nv, "длина"))); if (k < 1) { k = 1; } }
+  var cl = (s & LOW48)->clen; if (cl <= k) { return s; }
+  var m = k - 1; if (m < 1) { m = 1; }
+  return rt_plus(str_sub(s, 0, m), cstr("…"));
+}
+fn b_bryuki(F, self, argc, argv) {
+  var v = A0(argc, argv);
+  if (ISNIL(v)) { return cstr("элегантные шорты"); }
+  if (isnum(v)) { return rt_show(v); }
+  if (v == TRUEV) { return 1.0; } if (v == FALSEV) { return 0.0; }
+  if (is_t(v, T_STR)) {
+    var t = str_trim(v, 1, 1); var n = (t & LOW48)->blen;
+    if (n) { var buf = xmalloc(n + 1); memcpy(buf, S(t), n + 1); var i = 0; while (i < n) { if (ld8(buf + i) == ',') { st8(buf + i, '.'); break; } i += 1; } var r = parse_js_number(buf, n); free(buf); if (r != UNDEF) { return r; } }
+    return rt_iter(v);
+  }
+  if (is_t(v, T_LIST)) { return list_join(v, UNDEF); }
+  return rt_show(v);
+}
+fn b_cigel(F, self, argc, argv) { rt_fast = 1; return NUL; }
+fn b_mielofon(F, self, argc, argv) {
+  var v = A0(argc, argv); var m = dict_new(0); var i = 0;
+  if (is_t(v, T_DICT)) { while (i < dict_n(v)) { var k = dict_k(v, i); if (k != UNDEF) { dict_set(m, k, dict_v(v, i)); } i += 1; } }
+  else if (is_t(v, T_OBJ)) { var f = (v & LOW48)->fields; while (i < dict_n(f)) { var k2 = dict_k(f, i); if (k2 != UNDEF && !is_t(dict_v(f, i), T_FN)) { dict_set(m, k2, dict_v(f, i)); } i += 1; } }
+  else { dict_set(m, rt_K[4], v); }
+  var b = sb_new(); sb_cs(b, "Миелофон читает мысли («"); sb_cs(b, type_name(v)); sb_cs(b, "»):"); var hdr = sb_done(b);
+  rt_say(S(hdr));
+  i = 0;
+  while (i < dict_n(m)) { var k3 = dict_k(m, i); if (k3 != UNDEF) { var b2 = sb_new(); sb_cs(b2, "  "); show_to(b2, k3, 0, 0); sb_cs(b2, " = "); show_to(b2, dict_v(m, i), 1, 0); var line = sb_done(b2); rt_say(S(line)); } i += 1; }
+  return m;
+}
+fn b_zamurovali(F, self, argc, argv) { var m = A0(argc, argv); var s = cstr("Замуровали, демоны!"); if (m != UNDEF) { s = rt_plus(rt_plus(s, cstr(" ")), rt_show(m)); } rt_throw(s); return 0; }
+fn b_smutnye(F, self, argc, argv) { var v = A0(argc, argv); var b = sb_new(); sb_cs(b, "Меня терзают смутные сомнения: "); show_to(b, v, 1, 0); sb_cs(b, " ("); sb_cs(b, type_name(v)); sb_cs(b, ")"); sb_add(b, "", 0); err_cstr(b[0]); sb_free(b); return v; }
+fn b_kachel(F, self, argc, argv) { var a = rt_iter(A0(argc, argv)); var n = LEN(a); var i = n - 2; while (i >= 0) { list_push(a, ITEMS(a)[i]); i -= 1; } return a; }
+fn b_elektronik(F, self, argc, argv) { var f = A0(argc, argv); if (!is_t(f, T_FN)) { rt_fail("Электронику нужно поручить функцию"); } var r = rt_callv(f, argc - 1, argv + 8); rt_say("Электроник сделал всё за Сыроежкина"); return r; }
+fn b_nu_pogodi(F, self, argc, argv) { var ms = A0(argc, argv); if (ms == UNDEF) { ms = 1000.0; } var a[1]; a[0] = ms; return b_pauza(0, UNDEF, 1, a); }
+fn b_ressi(F, self, argc, argv) { var a = rt_iter(A0(argc, argv)); var x = A1(argc, argv); var i = 0; while (i < LEN(a)) { if (rt_eqb(ITEMS(a)[i], x)) { return i2f(i); } i += 1; } return -1.0; }
+fn b_peresekayutsya(F, self, argc, argv) {
+  var i = 0; while (i < 8) { rt_num(ARG(argc, argv, i), "координата"); i += 1; }
+  var x1 = argv[0]; var y1 = argv[1]; var w1 = argv[2]; var h1 = argv[3]; var x2 = argv[4]; var y2 = argv[5]; var w2 = argv[6]; var h2 = argv[7];
+  return BOOLV(flt(x1, fadd(x2, w2)) && flt(x2, fadd(x1, w1)) && flt(y1, fadd(y2, h2)) && flt(y2, fadd(y1, h1)));
+}
+fn b_net(F, self, argc, argv) { rt_fail("эта встроенная функция недоступна в нативной сборке"); return 0; }
+
+fn regb(name, code) { var k = cstr(name); rt_tmp[6] = k; dict_set(rt_B, k, rt_fn(code, 0, name, 0, 99)); rt_tmp[6] = UNDEF; return 0; }
+fn rt_init() {
+  gc_root(rt_K, 16); gc_root(rt_M, 8); gc_root(rt_tmp, 16); gc_root(&rt_B, 1); gc_root(&rt_FileCls, 1);
+  rt_K[0] = cstr("строкой"); rt_K[1] = cstr("создать"); rt_K[2] = cstr("сообщение"); rt_K[3] = cstr("длина"); rt_K[4] = cstr("значение"); rt_K[5] = cstr("Ошибка");
+  init_methods();
+  rt_B = dict_new(0);
+  var fc = rt_class_new(cstr("файл"), NUL); rt_FileCls = fc;
+  rt_class_add(fc, 0, cstr("прочитай"), rt_fn(f_read, 0, "прочитай", 0, 99));
+  rt_class_add(fc, 0, cstr("запиши"), rt_fn(f_write, 0, "запиши", 0, 99));
+  rt_class_add(fc, 0, cstr("допиши"), rt_fn(f_append, 0, "допиши", 0, 99));
+  rt_class_add(fc, 0, cstr("закрой"), rt_fn(f_close, 0, "закрой", 0, 99));
+  rt_class_add(fc, 0, cstr("закрыть"), rt_fn(f_close, 0, "закрыть", 0, 99));
+  rt_class_add(fc, 0, cstr("войти"), rt_fn(f_enter, 0, "войти", 0, 99));
+  rt_class_add(fc, 0, cstr("выйти"), rt_fn(f_close, 0, "выйти", 0, 99));
+  rt_init_builtins();
+  return 0;
+}
