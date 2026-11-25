@@ -111,7 +111,8 @@ test("примеры из репозитория по-прежнему выпо�
   const dir = path.join(__dirname, "../primery");
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".pon"))) {
     const src = fs.readFileSync(path.join(dir, f), "utf8");
-    const out = Y.run(src, { ask: () => "5", resolve: (p) => ({ id: p, name: p, source: fs.readFileSync(path.join(dir, p), "utf8") }) });
+    const STD = require("../src/std.js");
+    const out = Y.run(src, { ask: () => "5", gfx: { call: () => null, busy: () => false }, write: () => {}, resolve: (p) => { const m = String(p).match(/^стд\/(.+)$/); if (m) return { id: "стд:" + m[1], name: p, source: STD[m[1]] }; return { id: p, name: p, source: fs.readFileSync(path.join(dir, p), "utf8") }; } });
     assert.ok(out.length > 0, f);
   }
 });
