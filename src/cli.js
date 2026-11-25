@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const Y = require("./yadro");
-const VERSION = "2.6.0";
+const VERSION = Y.VERSION;
 const MAGIC = Buffer.from("PONYATNY", "ascii");
 
 if (process.platform === "win32") { try { require("child_process").execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "chcp.com"), ["65001"], { stdio: "ignore", windowsHide: true }); } catch (e) {} }
@@ -79,6 +79,9 @@ function parseFlags(args) {
     else if (a === "--js") flags.js = true;
     else if (a === "--ascii" || a === "--латиница") flags.ascii = true;
     else if (a === "--основа" || a === "--base") flags.base = args[++i];
+    else if (a === "--ios" || a === "--айос" || a === "--iphone") flags.ios = true;
+    else if (a === "--id" || a === "--идентификатор") flags.id = args[++i];
+    else if (a === "--название" || a === "--title") flags.title = args[++i];
     else rest.push(a);
   }
   return { flags, rest };
@@ -90,6 +93,7 @@ function help() {
   out("Команды:");
   out("  ponyatny запустить программа.pon        выполнить программу");
   out("  ponyatny собрать программа.pon [-o имя]  сделать программу .exe (на Windows) или исполняемый файл (на Linux)");
+  out("  ponyatny собрать программа.pon --ios     проект для iPhone и iPad (Xcode, подпись через переменные окружения)");
   out("  ponyatny компилировать программа.pon     получить программа.js (JavaScript для Node.js)");
   out("  ponyatny проверить программа.pon         только проверить ошибки");
   out("  ponyatny перевести файл --в язык         по желанию: перевести в python, javascript, csharp или понятный (из .py и .js)");
@@ -128,7 +132,21 @@ function cmdCompile(file, flags) {
   out("Готово: " + target);
 }
 
+function cmdBuildIos(file, flags) {
+  const js = compileFile(file, flags);
+  const title = flags.title || path.basename(file).replace(/\.pon$/i, "");
+  const dir = flags.out || file.replace(/\.pon$/i, "") + "-ios";
+  if (fs.existsSync(dir) && fs.readdirSync(dir).length && !fs.existsSync(path.join(dir, "project.yml"))) { errOut("Ошибка. Папка «" + dir + "» уже занята другими файлами. Укажи другую через -o."); process.exit(2); }
+  let r;
+  try { r = require("./ios.js").makeIosProject({ js, title, dir, Y, bundleId: flags.id }); }
+  catch (e) { errOut("Ошибка. " + e.message); process.exit(2); }
+  out("Готово: проект iOS «" + title + "» в папке " + dir + " (" + r.name + ", " + r.bundleId + ")");
+  out("Собрать на Mac: " + path.join(dir, "sobrat-ios.sh") + " — без переменных подписи получится сборка для симулятора,");
+  out("с IOS_TEAM_ID, IOS_CERT_P12_BASE64, IOS_CERT_PASSWORD и IOS_PROFILE_BASE64 — подписанный .ipa (см. docs/iOS.md).");
+}
+
 function cmdBuild(file, flags) {
+  if (flags.ios) return cmdBuildIos(file, flags);
   const js = Y.standalone(compileFile(file, flags));
   let base = flags.base;
   if (!base) {

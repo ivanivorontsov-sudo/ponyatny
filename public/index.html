@@ -38,22 +38,27 @@ pre.code{background:#fbfaf6;color:#222;border:1px solid #bbb;white-space:pre;ove
 .tabs button.on{background:#2d4a7a;color:#fff}
 textarea.src{width:100%;height:24vh;font:14px/1.4 ui-monospace,Consolas,monospace;border:1px solid #bbb;border-radius:8px;padding:8px;margin-top:8px}
 .warn{color:#b26b00}
+.ok{color:#7CFC9A}
+#screen iframe{display:block;width:100%;border:0;height:0;background:transparent}
+#ver{font-size:12px;opacity:.8}
 </style>
 </head>
 <body>
-<header><h1>Понятный</h1><p>Язык программирования на понятном русском. Пиши код слева, жми «Запустить» (Ctrl+Enter). <a href="https://github.com/ivanivorontsov-sudo/ponyatny/blob/main/docs/%D0%A1%D0%98%D0%9D%D0%A2%D0%90%D0%9A%D0%A1%D0%98%D0%A1.md" target="_blank">Синтаксис</a></p></header>
+<header><h1>Понятный <span id="ver"></span></h1><p>Язык программирования на понятном русском. Пиши код слева, жми «Запустить» (Ctrl+Enter). <a href="https://github.com/ivanivorontsov-sudo/ponyatny/blob/main/docs/%D0%A1%D0%98%D0%9D%D0%A2%D0%90%D0%9A%D0%A1%D0%98%D0%A1.md" target="_blank">Синтаксис</a></p></header>
 <main>
 <section>
 <div class="bar">
 <button id="run">▶ Запустить</button>
 <button class="blue" id="showjs">Показать скомпилированный код</button>
 <select id="examples"><option value="">Примеры…</option></select>
+<button class="alt hidden" id="stop">■ Стоп</button>
 <button class="alt" id="clear">Очистить вывод</button>
 </div>
 <div class="editor"><div class="gutter" id="gutter"></div><pre id="hl" aria-hidden="true"></pre><textarea id="code" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></div>
 </section>
 <section>
 <div class="bar"><b>Результат</b></div>
+<div id="screen"></div>
 <pre class="out" id="out"></pre>
 <pre class="code hidden" id="jsout"></pre>
 <div class="tabs"><button id="tab-tr" class="on">Перевести</button></div>
@@ -77,10 +82,13 @@ textarea.src{width:100%;height:24vh;font:14px/1.4 ui-monospace,Consolas,monospac
 </main>
 <script src="acorn.js"></script>
 <script src="yadro.js"></script><script src="std.js"></script>
+<script src="grafika.js"></script>
 <script src="perevod-iz.js"></script>
 <script src="perevod-v.js"></script>
 <script>
 const Y = PonyatnyYadro;
+document.getElementById("ver").textContent = Y.VERSION || "";
+document.title = "Понятный " + (Y.VERSION || "") + " — язык программирования на русском";
 const $ = (id) => document.getElementById(id);
 const code = $("code"), hl = $("hl"), out = $("out"), gutter = $("gutter"), jsout = $("jsout");
 const EXAMPLES = [
@@ -95,6 +103,11 @@ const EXAMPLES = [
   ["novoe.pon", "Конвейер, шаблоны, ?., навсегда"],
   ["ocenki.pon", "Оценки: выбор, когда, лямбды"],
   ["vse.pon", "Всё сразу"],
+  ["igra.pon", "Игра «Пинг-понг» (2.7)"],
+  ["okno.pon", "Окно с кнопками (2.7)"],
+  ["kvant.pon", "Квантовые вычисления (2.7)"],
+  ["perenos.pon", "Перенос строк (2.7)"],
+  ["shutki27.pon", "Шуточные операторы (2.7)"],
 ];
 const files = {};
 let errLine = 0;
@@ -168,7 +181,10 @@ function showError(e) {
 }
 let sandbox = null, sandboxTimer = 0;
 const safeScript = (js) => js.replace(/<\/(script)/gi, "<\\/$1").replace(/\x3C!--/g, "\\x3C!--");
-function stopSandbox() { if (sandbox) { sandbox.remove(); sandbox = null; } clearTimeout(sandboxTimer); $("run").disabled = false; }
+let grafikaSrc = "";
+fetch("grafika.js").then((r) => r.text()).then((t) => { grafikaSrc = t; });
+function stopSandbox() { if (sandbox) { sandbox.remove(); sandbox = null; } clearTimeout(sandboxTimer); $("run").disabled = false; $("stop").classList.add("hidden"); }
+$("stop").onclick = () => finishRun(true);
 function finishRun(ok, msg, line) {
   stopSandbox();
   if (ok) out.appendChild(document.createTextNode("\n✔ Готово"));
@@ -190,24 +206,29 @@ $("run").onclick = () => {
   const boot = "\"use strict\";\n" +
     "const __makeRuntime = " + Y.makeRuntime.toString() + ";\n" +
     "const __post = (m) => parent.postMessage(m, \"*\");\n" +
-    "const __R = __makeRuntime({ write: (s) => __post({ t: \"out\", s: String(s) }), ask: (q) => { const a = prompt(q || \"Введи значение\"); __post({ t: \"out\", s: (q ? q + \" \" : \"\") + (a === null ? \"\" : a) }); return a === null ? \"\" : a; } });\n" +
-    "try {\n" + js + "\n__post({ t: \"done\" });\n} catch (e) {\n" +
-    "  if (e && e.isExit) { __post({ t: \"done\" }); } else {\n" +
+    "const __size = () => __post({ t: \"size\", h: document.documentElement.scrollHeight });\n" +
+    "const __G = window.PonyatnyGrafika ? PonyatnyGrafika.create(document, { opened: () => { __size(); setTimeout(__size, 50); }, error: (m) => __post({ t: \"err\", s: m, line: __R.L }), exit: () => __post({ t: \"done\" }) }) : null;\n" +
+    "if (window.ResizeObserver) new ResizeObserver(__size).observe(document.documentElement);\n" +
+    "const __R = __makeRuntime({ write: (s) => __post({ t: \"out\", s: String(s) }), writeErr: (s) => __post({ t: \"out\", s: String(s) }), feature: (s) => __post({ t: \"ok\", s: String(s) }), gfx: __G, ask: (q) => { const a = prompt(q || \"Введи значение\"); __post({ t: \"out\", s: (q ? q + \" \" : \"\") + (a === null ? \"\" : a) }); return a; } });\n" +
+    "try {\n" + js + "\n__post({ t: __G && __G.busy() ? \"live\" : \"done\" });\n} catch (e) {\n" +
+    "  if (e && e.isExit) { __post({ t: \"done\" }); } else if (__R.featureCatch(e)) { __post({ t: \"done\" }); } else {\n" +
     "  const m = e && e.isPon ? e.message : e instanceof RangeError ? __R.explain(e) : e instanceof ReferenceError ? \"имя используется раньше, чем объявлено\" : \"внутренняя ошибка: \" + (e && e.message);\n" +
     "  __post({ t: \"err\", s: (__R.L ? \"Строка \" + __R.L + \": \" : \"\") + m, line: __R.L });\n}}\n";
   sandbox = document.createElement("iframe");
   sandbox.setAttribute("sandbox", "allow-scripts allow-modals");
   sandbox.setAttribute("referrerpolicy", "no-referrer");
-  sandbox.style.display = "none";
-  sandbox.srcdoc = "<!doctype html><meta charset=\"utf-8\">\x3Cscript>" + safeScript(boot) + "\x3C/script>";
+  sandbox.srcdoc = "<!doctype html><meta charset=\"utf-8\"><style>body{margin:0;background:transparent}</style><body>\x3Cscript>" + safeScript(grafikaSrc) + "\x3C/script>\x3Cscript>" + safeScript(boot) + "\x3C/script>";
   $("run").disabled = true;
   sandboxTimer = setTimeout(() => finishRun(false, "программа работает слишком долго (больше 20 секунд) и остановлена", 0), 20000);
-  document.body.appendChild(sandbox);
+  $("screen").appendChild(sandbox);
 };
 window.addEventListener("message", (ev) => {
   if (!sandbox || ev.source !== sandbox.contentWindow) return;
   const m = ev.data || {};
-  if (m.t === "out") out.textContent += String(m.s) + "\n";
+  if (m.t === "out") out.appendChild(document.createTextNode(String(m.s) + "\n"));
+  else if (m.t === "ok") { const s = document.createElement("span"); s.className = "ok"; s.textContent = String(m.s) + "\n"; out.appendChild(s); }
+  else if (m.t === "size") sandbox.style.height = Math.min(2000, Number(m.h) || 0) + "px";
+  else if (m.t === "live") { clearTimeout(sandboxTimer); $("stop").classList.remove("hidden"); out.appendChild(document.createTextNode("▶ Окно работает. Чтобы закончить — «■ Стоп».\n")); }
   else if (m.t === "done") finishRun(true);
   else if (m.t === "err") finishRun(false, String(m.s), Number(m.line) || 0);
 });
