@@ -1,0 +1,190 @@
+// Связь с операционной системой: вывод, ввод, файлы, время, запуск программы.
+@linux extern write(i, i, i) -> i;
+@linux extern read(i, i, i) -> i;
+@linux extern isatty(i) -> i32;
+@linux extern fopen(i, i) -> i;
+@linux extern opendir(i) -> i;
+@linux extern readdir(i) -> i;
+@linux extern closedir(i) -> i32;
+@linux extern mkdir(i, i) -> i32;
+@linux extern unlink(i) -> i32;
+@linux extern access(i, i) -> i32;
+@linux extern usleep(i) -> i32;
+@linux extern clock_gettime(i, i) -> i32;
+@windows extern write(i, i, i) -> i32 from "c" as "_write";
+@windows extern read(i, i, i) -> i32 from "c" as "_read";
+@windows extern isatty(i) -> i32 from "c" as "_isatty";
+@windows extern _setmode(i, i) -> i32;
+@windows extern _wfopen(i, i) -> i;
+@windows extern _wmkdir(i) -> i32;
+@windows extern _wunlink(i) -> i32;
+@windows extern _waccess(i, i) -> i32;
+@windows extern SetConsoleOutputCP(i) -> i32 from "kernel32";
+@windows extern SetConsoleCP(i) -> i32 from "kernel32";
+@windows extern GetCommandLineW() -> i from "kernel32";
+@windows extern CommandLineToArgvW(i, i) -> i from "shell32";
+@windows extern WideCharToMultiByte(i, i, i, i, i, i, i, i) -> i32 from "kernel32";
+@windows extern MultiByteToWideChar(i, i, i, i, i, i) -> i32 from "kernel32";
+@windows extern Sleep(i) -> v from "kernel32";
+@windows extern FindFirstFileW(i, i) -> i from "kernel32";
+@windows extern FindNextFileW(i, i) -> i32 from "kernel32";
+@windows extern FindClose(i) -> i32 from "kernel32";
+@windows extern GetSystemTimeAsFileTime(i) -> v from "kernel32";
+extern fread(i, i, i, i) -> i;
+extern fwrite(i, i, i, i) -> i;
+extern fclose(i) -> i32;
+extern time(i) -> i;
+extern localtime(i) -> i;
+
+global obuf;
+global olen;
+fn out_flush() { var off = 0; while (off < olen) { var n = write(1, obuf + off, olen - off); if (n <= 0) { break; } off += n; } olen = 0; return 0; }
+fn out_write(s, n) {
+  if (n > 60000) { out_flush(); write(1, s, n); return 0; }
+  if (olen + n > 65536) { out_flush(); }
+  memcpy(obuf + olen, s, n); olen += n;
+  return 0;
+}
+fn err_cstr(s) { out_flush(); write(2, s, strlen(s)); write(2, "\n", 1); return 0; }
+// чтение строки из stdin; возвращает строку «Понятного» или NUL при конце ввода
+global ibuf;
+global ipos;
+global ilen;
+global ieof;
+fn in_byte() {
+  if (ipos >= ilen) { if (ieof) { return -1; } ilen = read(0, ibuf, 65536); ipos = 0; if (ilen <= 0) { ilen = 0; ieof = 1; return -1; } }
+  var c = ld8(ibuf + ipos); ipos += 1; return c;
+}
+fn read_line() {
+  var b = sb_new(); var got = 0;
+  while (1) {
+    var c = in_byte();
+    if (c < 0) { break; }
+    got = 1;
+    if (c == 10) { break; }
+    sb_byte(b, c);
+  }
+  if (!got) { sb_free(b); return NUL; }
+  if (b[1] > 0 && ld8(b[0] + b[1] - 1) == 13) { b[1] = b[1] - 1; }
+  return sb_done(b);
+}
+// путь в «широкие» символы для Windows
+fn wpath(s) {
+  var n = MultiByteToWideChar(65001, 0, s, -1, 0, 0);
+  var w = xmalloc(n * 2 + 2);
+  MultiByteToWideChar(65001, 0, s, -1, w, n);
+  return w;
+}
+fn os_fopen(path, mode) {
+  if (WINDOWS) { var wp = wpath(path); var wm = wpath(mode); var f = _wfopen(wp, wm); free(wp); free(wm); return f; }
+  return fopen(path, mode);
+}
+fn read_file(path) {
+  var f = os_fopen(path, "rb"); if (f == 0) { return UNDEF; }
+  var b = sb_new(); var buf[1024];
+  while (1) { var n = fread(buf, 1, 8192, f); if (n <= 0) { break; } sb_add(b, buf, n); }
+  fclose(f);
+  return sb_done(b);
+}
+fn write_file(path, s, append) {
+  var m = "wb"; if (append) { m = "ab"; }
+  var f = os_fopen(path, m); if (f == 0) { return 0; }
+  var p = s & LOW48;
+  fwrite(p->sp, 1, p->blen, f); fclose(f); return 1;
+}
+fn file_exists(path) {
+  if (WINDOWS) { var wp = wpath(path); var r = _waccess(wp, 0); free(wp); return r == 0; }
+  return access(path, 0) == 0;
+}
+fn os_unlink(path) { if (WINDOWS) { var wp = wpath(path); var r = _wunlink(wp); free(wp); return r == 0; } return unlink(path) == 0; }
+fn os_mkdir1(path) { if (WINDOWS) { var wp = wpath(path); var r = _wmkdir(wp); free(wp); return r == 0; } return mkdir(path, 511) == 0; }
+fn os_mkdirs(path) {
+  var n = strlen(path); var tmp = xmalloc(n + 1); memcpy(tmp, path, n + 1); var i = 1;
+  while (i <= n) {
+    var c = ld8(tmp + i);
+    if (c == '/' || c == '\\' || c == 0) { st8(tmp + i, 0); if (!file_exists(tmp)) { os_mkdir1(tmp); } st8(tmp + i, c); }
+    i += 1;
+  }
+  free(tmp);
+  return file_exists(path);
+}
+// список имён в папке (без . и ..), неотсортированный; NUL при ошибке
+fn list_dir(path) {
+  var r = list_new(8);
+  if (WINDOWS) {
+    var n = strlen(path); var pat = xmalloc(n + 4); memcpy(pat, path, n); memcpy(pat + n, "\\*", 3);
+    var wp = wpath(pat); free(pat);
+    var fd[80];
+    var h = FindFirstFileW(wp, fd); free(wp);
+    if (h == -1) { return NUL; }
+    while (1) {
+      var name = fd + 44;
+      var out[64];
+      var len = WideCharToMultiByte(65001, 0, name, -1, out, 500, 0, 0);
+      if (len > 0 && strcmp(out, ".") != 0 && strcmp(out, "..") != 0) { list_push(r, cstr(out)); }
+      if (FindNextFileW(h, fd) == 0) { break; }
+    }
+    FindClose(h);
+    return r;
+  }
+  var d = opendir(path); if (d == 0) { return NUL; }
+  while (1) {
+    var e = readdir(d); if (e == 0) { break; }
+    var nm = e + 19;
+    if (strcmp(nm, ".") != 0 && strcmp(nm, "..") != 0) { list_push(r, cstr(nm)); }
+  }
+  closedir(d);
+  return r;
+}
+fn os_sleep_ms(ms) { out_flush(); if (WINDOWS) { Sleep(ms); return 0; } usleep(ms * 1000); return 0; }
+fn os_time() {
+  var t[2];
+  if (WINDOWS) { GetSystemTimeAsFileTime(t); var ft = t[0]; return fdiv(i2f(ft - 116444736000000000), 10000000.0); }
+  clock_gettime(0, t);
+  return fadd(i2f(t[0]), fdiv(i2f(t[1]), 1000000000.0));
+}
+
+global rt_args;
+global rt_argc;
+global rt_argv;
+global rt_stack;
+fn rt_entry(argc, argv) {
+  rt_argc = argc; rt_argv = argv;
+  if (WINDOWS) {
+    SetConsoleOutputCP(65001); SetConsoleCP(65001); _setmode(0, 0x8000); _setmode(1, 0x8000); _setmode(2, 0x8000);
+    var cnt[1];
+    var wargv = CommandLineToArgvW(GetCommandLineW(), cnt);
+    rt_argc = cnt[0]; rt_argv = xmalloc(8 * (rt_argc + 1));
+    var i = 0;
+    while (i < rt_argc) { var w = ld(wargv + 8 * i); var n = WideCharToMultiByte(65001, 0, w, -1, 0, 0, 0, 0); var s = xmalloc(n + 1); WideCharToMultiByte(65001, 0, w, -1, s, n, 0, 0); rt_argv[i] = s; i += 1; }
+    rt_entry2();
+    return 0;
+  }
+  var size = 536870912;
+  rt_stack = malloc(size);
+  if (rt_stack == 0) { rt_entry2(); return 0; }
+  run_on_stack((rt_stack + size - 64) & -16, rt_entry2);
+  return 0;
+}
+fn rt_entry2() {
+  gc_bottom = getbp() + 16;
+  obuf = xmalloc(65600); ibuf = xmalloc(65600);
+  rt_color = isatty(1) != 0;
+  rt_init();
+  prog_main();
+  rt_exit(0);
+  return 0;
+}
+fn rt_exit(code) { out_flush(); exit(code); return 0; }
+fn rt_uncaught() {
+  var e = rt_exc;
+  if (rt_feature) { rt_feature_show(e); rt_exit(0); }
+  var b = sb_new();
+  sb_cs(b, "Ошибка. ");
+  if (rt_L) { var nb[4]; snprintf(nb, 30, "Строка %d: ", rt_L); sb_cs(b, nb); }
+  sb_v(b, rt_errtext(e));
+  err_cstr(b[0]);
+  rt_exit(1);
+  return 0;
+}
+fn rt_errtext(e) { if (is_t(e, T_STR)) { return e; } return rt_show(e); }

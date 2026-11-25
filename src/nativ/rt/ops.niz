@@ -1,0 +1,182 @@
+// Показ значений, вывод, логика, арифметика, сравнения.
+global rt_K[16];   // строковые константы среды: 0 «строкой», 1 «создать», 2 «сообщение», 3 «длина», 4 «значение», 5 «Ошибка»
+fn type_name(v) {
+  var t = vtype(v);
+  if (t == T_UNDEF || t == T_NULL) { return "ничего"; }
+  if (t == T_NUM) { return "число"; }
+  if (t == T_STR) { return "строка"; }
+  if (t == T_BOOL) { return "логическое"; }
+  if (t == T_LIST) { return "список"; }
+  if (t == T_DICT) { return "словарь"; }
+  if (t == T_SET) { return "множество"; }
+  if (t == T_IFACE) { return "интерфейс"; }
+  if (t == T_FN || t == T_CLASS) { return "функция"; }
+  if (t == T_OBJ) { return S(((v & LOW48)->ocls & LOW48)->cname); }
+  if (t == T_PTR) { return "указатель"; }
+  if (t == T_BUF) { return "буфер"; }
+  return "значение";
+}
+fn show_to(b, v, nested, depth) {
+  var nb[8];
+  if (depth > 200) { rt_fail("слишком глубокая вложенность значения"); }
+  var t = vtype(v);
+  var i = 0; var first = 1; var n = 0;
+  if (t == T_UNDEF || t == T_NULL) { sb_cs(b, "ничего"); return 0; }
+  if (t == T_BOOL) { if (v == TRUEV) { sb_cs(b, "истина"); } else { sb_cs(b, "ложь"); } return 0; }
+  if (t == T_NUM) { fmt_num(v, nb); sb_cs(b, nb); return 0; }
+  if (t == T_STR) { if (nested) { sb_add(b, "\"", 1); } sb_v(b, v); if (nested) { sb_add(b, "\"", 1); } return 0; }
+  if (t == T_LIST) {
+    sb_add(b, "[", 1);
+    while (i < LEN(v)) { if (i) { sb_add(b, ", ", 2); } show_to(b, ITEMS(v)[i], 1, depth + 1); i += 1; }
+    sb_add(b, "]", 1); return 0;
+  }
+  if (t == T_DICT) {
+    sb_add(b, "{", 1); n = dict_n(v);
+    while (i < n) { var k = dict_k(v, i); if (k != UNDEF) { if (!first) { sb_add(b, ", ", 2); } first = 0; show_to(b, k, 1, depth + 1); sb_add(b, ": ", 2); show_to(b, dict_v(v, i), 1, depth + 1); } i += 1; }
+    sb_add(b, "}", 1); return 0;
+  }
+  if (t == T_SET) {
+    sb_cs(b, "множество{"); n = dict_n(v);
+    while (i < n) { var k2 = dict_k(v, i); if (k2 != UNDEF) { if (!first) { sb_add(b, ", ", 2); } first = 0; show_to(b, k2, 1, depth + 1); } i += 1; }
+    sb_add(b, "}", 1); return 0;
+  }
+  if (t == T_IFACE) { sb_cs(b, "интерфейс "); sb_v(b, (v & LOW48)->iname); return 0; }
+  if (t == T_FN || t == T_CLASS) { sb_cs(b, "функция"); return 0; }
+  if (t == T_PTR) { snprintf(nb, 60, "указатель(%p)", v & LOW48); sb_cs(b, nb); return 0; }
+  if (t == T_BUF) { snprintf(nb, 60, "буфер(%lld байт)", (v & LOW48)->bsize); sb_cs(b, nb); return 0; }
+  if (t == T_OBJ) {
+    var o = v & LOW48;
+    var fv = dict_get(o->fields, rt_K[0]);
+    var m = UNDEF;
+    if (fv == UNDEF) { m = cls_lookup(o->ocls, 0, rt_K[0]); } else if (is_t(fv, T_FN)) { m = fv; }
+    if (m != UNDEF) { var r = rt_callf(m, v, 0, 0); show_to(b, r, 0, depth + 1); return 0; }
+    sb_v(b, (o->ocls & LOW48)->cname); sb_add(b, "(", 1);
+    var f = o->fields; n = dict_n(f);
+    while (i < n) { var k3 = dict_k(f, i); if (k3 != UNDEF) { if (!first) { sb_add(b, ", ", 2); } first = 0; sb_v(b, k3); sb_add(b, ": ", 2); show_to(b, dict_v(f, i), 1, depth + 1); } i += 1; }
+    sb_add(b, ")", 1); return 0;
+  }
+  sb_cs(b, "значение"); return 0;
+}
+fn rt_show(v) { if (is_t(v, T_STR)) { return v; } var b = sb_new(); show_to(b, v, 0, 0); return sb_done(b); }
+fn rt_shown(v) { var b = sb_new(); show_to(b, v, 1, 0); return sb_done(b); }
+fn cshow(v) { return S(rt_show(v)); }
+fn cshown(v) { return S(rt_shown(v)); }
+fn rt_print(n, items) {
+  if (rt_mute) { return 0; }
+  var b = sb_new(); var i = 0;
+  while (i < n) { if (i) { sb_add(b, " ", 1); } show_to(b, items[i], 0, 0); i += 1; }
+  out_write(b[0], b[1]); out_write("\n", 1); sb_free(b);
+  return 0;
+}
+fn rt_eprint(n, items, debug) {
+  var b = sb_new(); var i = 0;
+  if (debug) { sb_cs(b, "[отладка] "); }
+  while (i < n) { if (i) { sb_add(b, " ", 1); } show_to(b, items[i], 0, 0); i += 1; }
+  sb_add(b, "", 0);
+  err_cstr(b[0]); sb_free(b);
+  return 0;
+}
+fn rt_say(c) { if (rt_mute == 0) { out_write(c, strlen(c)); out_write("\n", 1); } return 0; }
+fn rt_tmpl(n, parts) { var b = sb_new(); var i = 0; while (i < n) { show_to(b, parts[i], 0, 0); i += 1; } return sb_done(b); }
+
+// ===================== Логика и арифметика =====================
+fn rt_truth(v) {
+  if (isnum(v)) { return fne(v, 0.0); }
+  if (v == TRUEV) { return 1; }
+  if (v == FALSEV || v == NUL || v == UNDEF) { return 0; }
+  if (is_t(v, T_STR)) { return (v & LOW48)->blen != 0; }
+  return 1;
+}
+fn arith_fail(op, a, b) { rt_failf("нельзя %s «%s» и «%s»", op, type_name(a), type_name(b)); return 0; }
+fn rt_plus(a, b) {
+  if (isnum(a) && isnum(b)) { return fadd(a, b); }
+  if (is_t(a, T_STR) || is_t(b, T_STR)) {
+    var x = rt_show(a); rt_tmp[0] = x; var y = rt_show(b);
+    var xs = x & LOW48; var ys = y & LOW48;
+    var n = xs->blen + ys->blen;
+    if (n > 100000000) { rt_fail("слишком длинная строка (больше 100 миллионов символов)"); }
+    var s = xmalloc(n + 1); memcpy(s, xs->sp, xs->blen); memcpy(s + xs->blen, ys->sp, ys->blen); st8(s + n, 0);
+    rt_tmp[0] = UNDEF;
+    return str_own(s, n);
+  }
+  if (is_t(a, T_LIST) && is_t(b, T_LIST)) {
+    var r = list_new(LEN(a) + LEN(b)); var rp = r & LOW48;
+    memcpy(rp->items, ITEMS(a), LEN(a) * 8); memcpy(rp->items + LEN(a) * 8, ITEMS(b), LEN(b) * 8); rp->len = LEN(a) + LEN(b);
+    return r;
+  }
+  arith_fail("сложить", a, b); return 0;
+}
+fn rt_minus(a, b) { if (isnum(a) && isnum(b)) { return fsub(a, b); } arith_fail("вычесть", a, b); return 0; }
+fn rt_mul(a, b) {
+  if (isnum(a) && isnum(b)) { return fmul(a, b); }
+  var nd = 0.0; var n = 0; var i = 0;
+  if (is_t(a, T_STR) && isnum(b)) {
+    nd = ffloor(b); if (flt(nd, 0.0) || fne(nd, nd)) { nd = 0.0; }
+    var s = a & LOW48;
+    if (fgt(fmul(i2f(s->clen), nd), 1e8)) { rt_fail("слишком длинная строка (больше 100 миллионов символов)"); }
+    n = f2i(nd); var sb = sb_new(); while (i < n) { sb_add(sb, s->sp, s->blen); i += 1; } return sb_done(sb);
+  }
+  if (is_t(a, T_LIST) && isnum(b)) {
+    nd = ffloor(b); if (flt(nd, 0.0) || fne(nd, nd)) { nd = 0.0; }
+    if (fgt(fmul(i2f(LEN(a)), nd), 1e7)) { rt_fail("слишком длинный список (больше 10 миллионов элементов)"); }
+    n = f2i(nd); var r = list_new(LEN(a) * n);
+    while (i < n) { var j = 0; while (j < LEN(a)) { list_push(r, ITEMS(a)[j]); j += 1; } i += 1; }
+    return r;
+  }
+  arith_fail("умножить", a, b); return 0;
+}
+fn rt_div(a, b) { if (!isnum(a) || !isnum(b)) { arith_fail("разделить", a, b); } if (feq(b, 0.0)) { rt_fail("делить на ноль нельзя"); } return fdiv(a, b); }
+extern fmod(f, f) -> f from "m";
+extern pow(f, f) -> f from "m";
+fn rt_mod(a, b) { if (!isnum(a) || !isnum(b)) { arith_fail("найти остаток от деления", a, b); } if (feq(b, 0.0)) { rt_fail("делить на ноль нельзя"); } if (flt(a, 1e15) && fgt(a, -1e15) && flt(b, 1e15) && fgt(b, -1e15)) { var ia = f2i(a); var ib = f2i(b); if (feq(i2f(ia), a) && feq(i2f(ib), b)) { var r = ia % ib; if (r != 0 && ((r < 0) != (ib < 0))) { r += ib; } if (r == 0 && flt(a, 0.0)) { return fmod(fadd(fmod(a, b), b), b); } return i2f(r); } } return fmod(fadd(fmod(a, b), b), b); }
+fn js_pow(a, b) {
+  if (fne(b, b)) { return NANV; }
+  if (feq(b, 0.0)) { return 1.0; }
+  if ((feq(a, 1.0) || feq(a, -1.0)) && (feq(b, 1e400) || feq(b, -1e400))) { return NANV; }
+  return pow(a, b);
+}
+fn rt_pow(a, b) { if (!isnum(a) || !isnum(b)) { arith_fail("возвести в степень", a, b); } return js_pow(a, b); }
+fn rt_num(v, what) { if (!isnum(v)) { if (what == 0) { what = "значение"; } rt_failf("%s должно быть числом, а получено: %s", what, type_name(v), 0); } return v; }
+fn rt_neg(a) { if (isnum(a)) { return a ^ 0x8000000000000000; } rt_num(a, "значение после минуса"); return a; }
+fn rt_eqb(a, b) {
+  if (isnum(a) || isnum(b)) { return isnum(a) && isnum(b) && feq(a, b); }
+  if (a == b) { return 1; }
+  if (ISNIL(a) || ISNIL(b)) { return ISNIL(a) && ISNIL(b); }
+  var ta = vtype(a); var i = 0; var n = 0;
+  if (ta != vtype(b)) { return 0; }
+  if (ta == T_STR) { return str_eq(a, b); }
+  if (ta == T_LIST) { if (LEN(a) != LEN(b)) { return 0; } while (i < LEN(a)) { if (!rt_eqb(ITEMS(a)[i], ITEMS(b)[i])) { return 0; } i += 1; } return 1; }
+  if (ta == T_DICT) { if (dict_live(a) != dict_live(b)) { return 0; } n = dict_n(a); while (i < n) { var k = dict_k(a, i); if (k != UNDEF) { var o = dict_get(b, k); if (o == UNDEF || !rt_eqb(dict_v(a, i), o)) { return 0; } } i += 1; } return 1; }
+  if (ta == T_SET) { if (dict_live(a) != dict_live(b)) { return 0; } n = dict_n(a); while (i < n) { var k2 = dict_k(a, i); if (k2 != UNDEF && !dict_has(b, k2)) { return 0; } i += 1; } return 1; }
+  return 0;
+}
+fn rt_eq(a, b) { return BOOLV(rt_eqb(a, b)); }
+fn rt_ne(a, b) { return BOOLV(!rt_eqb(a, b)); }
+fn str_cmp(a, b) {
+  var x = a & LOW48; var y = b & LOW48;
+  var n = x->blen; if (y->blen < n) { n = y->blen; }
+  var c = memcmp(x->sp, y->sp, n);
+  if (c == 0) { if (x->blen < y->blen) { return -1; } if (x->blen > y->blen) { return 1; } return 0; }
+  if (c < 0) { return -1; } return 1;
+}
+fn cmp_slow(a, b, sym) {
+  if (is_t(a, T_STR) && is_t(b, T_STR)) { return str_cmp(a, b); }
+  rt_failf("нельзя сравнить «%s» и «%s» знаком «%s»", type_name(a), type_name(b), sym); return 0;
+}
+fn rt_lt(a, b) { if (isnum(a) && isnum(b)) { return BOOLV(flt(a, b)); } return BOOLV(cmp_slow(a, b, "<") < 0); }
+fn rt_gt(a, b) { if (isnum(a) && isnum(b)) { return BOOLV(fgt(a, b)); } return BOOLV(cmp_slow(a, b, ">") > 0); }
+fn rt_le(a, b) { if (isnum(a) && isnum(b)) { return BOOLV(fle(a, b)); } return BOOLV(cmp_slow(a, b, "<=") <= 0); }
+fn rt_ge(a, b) { if (isnum(a) && isnum(b)) { return BOOLV(fge(a, b)); } return BOOLV(cmp_slow(a, b, ">=") >= 0); }
+fn str_find(h, nd, from) {
+  var hp = h & LOW48; var np = nd & LOW48;
+  if (np->blen == 0) { if (from <= hp->blen) { return from; } return -1; }
+  var i = from;
+  while (i + np->blen <= hp->blen) { if (memcmp(hp->sp + i, np->sp, np->blen) == 0) { return i; } i += 1; }
+  return -1;
+}
+fn rt_has(x, c) {
+  if (is_t(c, T_STR)) { return BOOLV(str_find(c, rt_show(x), 0) >= 0); }
+  if (is_t(c, T_LIST)) { var i = 0; while (i < LEN(c)) { if (rt_eqb(x, ITEMS(c)[i])) { return TRUEV; } i += 1; } return FALSEV; }
+  if (is_t(c, T_DICT) || is_t(c, T_SET)) { return BOOLV(dict_has(c, x)); }
+  rt_failf("проверять «в» можно только для строки, списка или словаря, а не для «%s»", type_name(c), 0, 0); return 0;
+}
