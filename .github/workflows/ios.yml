@@ -1,0 +1,65 @@
+name: Сборка под iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      program:
+        description: "Программа .pon (путь в репозитории)"
+        default: "primery/igra.pon"
+        required: true
+      title:
+        description: "Название на экране iPhone"
+        default: "Пинг-понг"
+        required: true
+      bundle_id:
+        description: "Идентификатор приложения (как в профиле Apple), например ru.vorontsov.igra"
+        default: ""
+        required: false
+      export_method:
+        description: "Способ подписи: ad-hoc, development или app-store"
+        default: "ad-hoc"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Проект Xcode из программы на «Понятном»
+        env:
+          PROGRAM: ${{ inputs.program }}
+          TITLE: ${{ inputs.title }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+        run: |
+          set -euo pipefail
+          node scripts/gen-std.js
+          node scripts/gen-licenzii.js
+          if [ -n "$BUNDLE_ID" ]; then
+            node src/cli.js собрать "$PROGRAM" --ios -o ios-app --название "$TITLE" --id "$BUNDLE_ID"
+          else
+            node src/cli.js собрать "$PROGRAM" --ios -o ios-app --название "$TITLE"
+          fi
+      - name: Сборка и подпись (секреты IOS_* — если заданы)
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_BUNDLE_ID: ${{ inputs.bundle_id }}
+          IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+          IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+          IOS_EXPORT_METHOD: ${{ inputs.export_method }}
+        run: ./ios-app/sobrat-ios.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: |
+            ios-app/build/*.zip
+            ios-app/build/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 14
