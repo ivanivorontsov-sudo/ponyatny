@@ -1343,6 +1343,10 @@
     "каждый_кадр": [1, 1], "клавиша": [1, 1], "мышь": [0, 0], "при_клике": [1, 1], "при_клавише": [1, 1], "стоп_игра": [0, 0],
     "кнопка": [2, 2], "надпись": [0, 1], "поле_ввода": [0, 1], "значение_поля": [1, 1], "задай_текст": [2, 2], "пищи": [0, 2],
     "ширина_экрана": [0, 0], "высота_экрана": [0, 0], "пересекаются": [8, 8],
+    "уведомление": [1, 1], "вибрация": [0, 1], "открой_ссылку": [1, 1],
+    "скопируй_в_буфер": [1, 1], "прочитай_буфер": [0, 0],
+    "информация_устройства": [0, 0], "заряд_батареи": [0, 0],
+    "сеть_доступна": [0, 0], "открой_настройки": [0, 0],
   };
   const BUILTIN_CLASSES = ["Ошибка"];
   const TYPES = ["число", "строка", "логическое", "список", "словарь", "функция", "ничего", "любое", "целое", "множество"];
@@ -2854,7 +2858,22 @@
       "ну_погоди": (ms) => R.b["пауза"](ms === undefined ? 1000 : ms),
       "рэсси": (l, x) => { const a = R.iter(l); for (let i = 0; i < a.length; i++) if (eq(a[i], x)) return i; return -1; },
       "пересекаются": (x1, y1, w1, h1, x2, y2, w2, h2) => { for (const v of [x1, y1, w1, h1, x2, y2, w2, h2]) needNum(v, "координата"); return x1 < x2 + w2 && x2 < x1 + w1 && y1 < y2 + h2 && y2 < y1 + h1; },
+      "уведомление": (message) => systemCall("toast", show(message)),
+      "вибрация": (duration) => systemCall("vibrate", duration === undefined ? 100 : needNum(duration, "длительность вибрации")),
+      "открой_ссылку": (url) => systemCall("openUrl", needStr(url, "ссылка")),
+      "скопируй_в_буфер": (value) => systemCall("copyText", show(value)),
+      "прочитай_буфер": () => systemCall("clipboardText"),
+      "информация_устройства": () => systemCall("deviceInfo"),
+      "заряд_батареи": () => systemCall("batteryPercent"),
+      "сеть_доступна": () => systemCall("networkAvailable"),
+      "открой_настройки": () => systemCall("openSettings"),
     });
+    const systemCall = (name, ...args) => {
+      const api = io.system;
+      if (!api || typeof api[name] !== "function") fail("Системный вызов «" + name + "» доступен только в Android-приложении или при запуске из Строки.");
+      try { return api[name](...args); }
+      catch (e) { fail("Системный вызов «" + name + "» завершился ошибкой: " + (e && e.message ? e.message : String(e))); }
+    };
     const gfx = () => { if (!io.gfx) fail("окна, графика и игры работают в песочнице «Понятного», в «Строке» (APK) и в сборке для iOS; в консоли их нет"); return io.gfx; };
     const toPon = (v) => {
       if (Array.isArray(v)) return v.map(toPon);
@@ -2903,7 +2922,7 @@
     io = io || {};
     const lines = [];
     const js = compile(src, { file: io.file, resolve: io.resolve, guard: io.guard !== false, warn: io.warn });
-    execute(js, { write: (s) => { lines.push(s); if (io.write) io.write(s); }, writeErr: (s) => { if (io.writeErr) io.writeErr(s); else { lines.push(s); if (io.write) io.write(s); } }, ask: io.ask || (() => ""), fs: io.fs, maxSteps: io.maxSteps, args: io.args || [], gfx: io.gfx, feature: io.feature ? (t) => { lines.push(t); io.feature(t); } : undefined });
+    execute(js, { write: (s) => { lines.push(s); if (io.write) io.write(s); }, writeErr: (s) => { if (io.writeErr) io.writeErr(s); else { lines.push(s); if (io.write) io.write(s); } }, ask: io.ask || (() => ""), fs: io.fs, system: io.system, maxSteps: io.maxSteps, args: io.args || [], gfx: io.gfx, feature: io.feature ? (t) => { lines.push(t); io.feature(t); } : undefined });
     return lines;
   }
 

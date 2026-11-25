@@ -155,3 +155,11 @@ test("сборка под iOS: проект Xcode без ключей в фай�
   assert.match(prog, /__ponyatnyMain/);
   new Function(prog);
 });
+
+test("системные вызовы Android: в консоли понятная ошибка, со «Строкой» работают", () => {
+  assert.throws(() => run("уведомление(\"привет\")"), /доступен только в Android-приложении/);
+  const calls = [];
+  const system = { toast: (t) => { calls.push(["toast", t]); return null; }, batteryPercent: () => 77, vibrate: (ms) => { calls.push(["vibrate", ms]); return null; } };
+  assert.deepStrictEqual(run("уведомление(\"привет\")\nвибрация()\nпиши заряд_батареи()", { system }), ["77"]);
+  assert.deepStrictEqual(calls, [["toast", "привет"], ["vibrate", 100]]);
+});
