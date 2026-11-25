@@ -14,4 +14,4 @@ npx --yes postject@1.0.0-alpha.6 dist/ponyatny.exe NODE_SEA_BLOB build/sea.blob 
 chmod +x dist/ponyatny-linux
 mkdir -p dist/LICENSES
 cp LICENSE THIRD_PARTY_NOTICES.md dist/LICENSES/
-cp licenses/node-LICENSE.txt licenses/acorn-LICENSE.txt dist/LICENSES/
+cp licenses/*.txt dist/LICENSES/
